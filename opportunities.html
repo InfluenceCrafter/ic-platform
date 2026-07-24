@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Opportunities — InfluenceCrafter Creator Hub</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <div class="page">
+    <h1>Opportunities</h1>
+    <p>Browse open collaborations and apply directly.</p>
+
+    <div class="card">
+      <div class="grid grid-3">
+        <div>
+          <label for="f-city">City</label>
+          <select id="f-city"><option value="">All cities</option></select>
+        </div>
+        <div>
+          <label for="f-category">Category</label>
+          <select id="f-category"><option value="">All categories</option></select>
+        </div>
+        <div>
+          <label for="f-type">Collaboration type</label>
+          <select id="f-type"><option value="">All types</option></select>
+        </div>
+      </div>
+    </div>
+
+    <div id="list" class="grid grid-3"></div>
+  </div>
+
+  <div id="modal-root"></div>
+
+  <script src="js/db.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/ui.js"></script>
+  <script>
+    const ctx = requireRole(['creator']);
+    let db, user, profile;
+    if (ctx) {
+      db = ctx.db; user = ctx.user; profile = currentCreatorProfile(db, user);
+      renderNav('opportunities.html');
+      initFilters();
+      renderList();
+      const params = new URLSearchParams(window.location.search);
+      const preselect = params.get('campaign');
+      if (preselect) openDetail(preselect);
+    }
+
+    function initFilters() {
+      const cities = [...new Set(db.campaigns.map((c) => c.city))];
+      const categories = [...new Set(db.campaigns.map((c) => c.category))];
+      const types = [...new Set(db.campaigns.map((c) => c.collaborationType))];
+      fillSelect('f-city', cities);
+      fillSelect('f-category', categories);
+      fillSelect('f-type', types, statusLabel);
+      ['f-city', 'f-category', 'f-type'].forEach((id) => document.getElementById(id).addEventListener('change', renderList));
+    }
+
+    function fillSelect(id, values, labelFn) {
+      const sel = document.getElementById(id);
+      values.forEach((v) => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = labelFn ? labelFn(v) : v;
+        sel.appendChild(opt);
+      });
+    }
+
+    function renderList() {
+      db = loadDB();
+      const city = document.getElementById('f-city').value;
+      const category = document.getElementById('f-category').value;
+      const type = document.getElementById('f-type').value;
+      const visible = ['open_for_applications', 'closing_soon', 'full'];
+      let campaigns = db.campaigns.filter((c) => visible.includes(c.status) && c.visibility === 'public');
+      if (city) campaigns = campaigns.filter((c) => c.city === city);
+      if (category) campaigns = campaigns.filter((c) => c.category === category);
+      if (type) campaigns = campaigns.filter((c) => c.collaborationType === type);
+
+      const list = document.getElementById('list');
+      if (campaigns.length === 0) {
+        list.className = '';
+        list.innerHTML = '<div class="card empty-state"><p>No opportunities match your filters right now.</p></div>';
+        return;
+      }
+      list.className = 'grid grid-3';
+      list.innerHTML = campaigns.map((c) => card(c)).join('');
+    }
+
+    function card(campaign) {
+      const brand = db.brands.find((b) => b.id === campaign.brandId);
+      const elig = checkEligibility(campaign, profile);
+      const myApp = db.applications.find((a) => a.campaignId === campaign.id && a.creatorId === profile.id);
+      const daysLeft = daysUntil(campaign.applicationDeadline);
+      return `
+      <div class="card">
+        <div class="card-row">
+          <strong>${escapeHtml(campaign.title)}</strong>
+          ${badge(campaign.status)}
+        </div>
+        <div class="muted small">${escapeHtml(brand.name)} · ${escapeHtml(campaign.city)}</div>
+        <p class="small" style="margin-top:8px;">${escapeHtml(campaign.shortDescription)}</p>
+        <div class="small">
+          <span class="tag">${escapeHtml(statusLabel(campaign.collaborationType))}</span>
+          <span class="tag">${escapeHtml(campaign.compensation.type)}</span>
+        </div>
+        <div class="small muted" style="margin-top:8px;">Apply by ${formatDate(campaign.applicationDeadline)} (${daysLeft >= 0 ? daysLeft + 'd left' : 'closed'})</div>
+        <div class="small ${elig.eligible ? 'due-done' : 'due-soon'}" style="margin-top:6px;">${elig.eligible ? '✓ ' + elig.label : '⚠ ' + elig.label}</div>
+        <button class="btn btn-secondary btn-block" style="margin-top:12px;" onclick="openDetail('${campaign.id}')">
+          ${myApp ? 'View application' : 'View Details'}
+        </button>
+      </div>`;
+    }
+
+    function openDetail(campaignId) {
+      const campaign = db.campaigns.find((c) => c.id === campaignId);
+      if (!campaign) return;
+      const brand = db.brands.find((b) => b.id === campaign.brandId);
+      const elig = checkEligibility(campaign, profile);
+      const myApp = db.applications.find((a) => a.campaignId === campaign.id && a.creatorId === profile.id);
+
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">×</button>
+            <h2>${escapeHtml(campaign.title)}</h2>
+            <div class="muted small">${escapeHtml(brand.name)} · ${escapeHtml(campaign.city)} · ${escapeHtml(campaign.address)}</div>
+            ${badge(campaign.status)}
+            <p style="margin-top:12px;">${escapeHtml(campaign.fullDescription)}</p>
+
+            <h3>Deliverables</h3>
+            ${campaign.deliverables.map((d) => `<div class="small">• ${d.quantity}× ${escapeHtml(d.type)}${d.requiresApproval ? ' (approval required)' : ''}</div>`).join('')}
+
+            <h3 style="margin-top:14px;">Compensation</h3>
+            <p class="small">${escapeHtml(campaign.compensation.type)} — ${escapeHtml(campaign.compensation.barterValue || '')}</p>
+
+            <h3>Campaign period</h3>
+            <p class="small">${formatDate(campaign.campaignStart)} – ${formatDate(campaign.campaignEnd)}. Apply by ${formatDate(campaign.applicationDeadline)}.</p>
+
+            <h3>Required creator profile</h3>
+            <p class="small">Min. ${campaign.criteria.minFollowers.toLocaleString()} Instagram followers · ${escapeHtml(campaign.criteria.requiredCity)} · ${escapeHtml(campaign.criteria.requiredCategory)} creators</p>
+            <div class="small ${elig.eligible ? 'due-done' : 'due-soon'}">${elig.eligible ? '✓ ' + elig.label : '⚠ ' + elig.label + (elig.reasons.length ? ': ' + elig.reasons.join('; ') : '')}</div>
+
+            ${myApp ? applicationStatusBlock(myApp) : applyForm(campaign, elig)}
+          </div>
+        </div>`;
+    }
+
+    function applicationStatusBlock(app) {
+      return `
+        <hr class="divider" />
+        <h3>Your application</h3>
+        ${badge(app.status)}
+        <p class="small" style="margin-top:8px;">
+          ${app.status === 'submitted' || app.status === 'under_review'
+            ? 'We are currently reviewing your profile.'
+            : app.status === 'approved'
+            ? 'You have been selected for this collaboration.'
+            : app.status === 'rejected'
+            ? 'Thank you for your interest. Unfortunately, we are unable to include you in this campaign, but we would love to consider you for future opportunities.'
+            : 'Submitted ' + formatDate(app.submittedAt) + '.'}
+        </p>
+        ${app.status === 'approved' ? `<a class="btn btn-primary btn-block" href="collaboration.html?id=${app.collaborationId}">Go to collaboration</a>` : ''}
+      `;
+    }
+
+    function applyForm(campaign, elig) {
+      return `
+        <hr class="divider" />
+        <h3>Apply for this collaboration</h3>
+        ${!elig.eligible ? '<p class="small due-soon">You can still apply — our team may override the requirements.</p>' : ''}
+        <form id="apply-form" onsubmit="submitApplication(event, '${campaign.id}')">
+          <label>Why are you interested in this collaboration?</label>
+          <textarea id="ap-why" required></textarea>
+          <div class="grid grid-2">
+            <div>
+              <label>Preferred visit date</label>
+              <input type="date" id="ap-date1" required />
+            </div>
+            <div>
+              <label>Alternative visit date</label>
+              <input type="date" id="ap-date2" />
+            </div>
+          </div>
+          <div class="checkbox-row">
+            <input type="checkbox" id="ap-plusone" />
+            <label for="ap-plusone">I will bring a +1</label>
+          </div>
+          <label>Proposed content idea</label>
+          <textarea id="ap-idea"></textarea>
+          <label>Optional note</label>
+          <textarea id="ap-note"></textarea>
+          <div class="checkbox-row">
+            <input type="checkbox" id="ap-confirm" required />
+            <label for="ap-confirm">I have read and can meet the campaign requirements</label>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block" style="margin-top:10px;">Apply Now</button>
+        </form>
+      `;
+    }
+
+    function submitApplication(e, campaignId) {
+      e.preventDefault();
+      const app = {
+        id: uid('app'),
+        campaignId,
+        creatorId: profile.id,
+        why: document.getElementById('ap-why').value,
+        preferredDate: document.getElementById('ap-date1').value,
+        altDate: document.getElementById('ap-date2').value,
+        plusOne: document.getElementById('ap-plusone').checked,
+        contentIdea: document.getElementById('ap-idea').value,
+        note: document.getElementById('ap-note').value,
+        status: 'submitted',
+        submittedAt: nowISO(),
+        reviewedAt: null,
+        reviewer: null,
+        collaborationId: null,
+      };
+      db.applications.push(app);
+      logActivity(db, { userId: user.id, entityType: 'application', entityId: app.id, action: 'Creator applied to campaign', campaignId });
+      db.users.filter((u) => u.role === 'admin').forEach((admin) => {
+        const campaign = db.campaigns.find((c) => c.id === campaignId);
+        addNotification(db, { userId: admin.id, type: 'application', title: 'New campaign application', message: `${user.firstName} ${user.lastName} applied to ${campaign.title}.`, campaignId });
+      });
+      saveDB(db);
+      toast('Application submitted.');
+      closeModal();
+      renderList();
+    }
+
+    function closeModal() {
+      document.getElementById('modal-root').innerHTML = '';
+      const url = new URL(window.location);
+      url.searchParams.delete('campaign');
+      window.history.replaceState({}, '', url);
+    }
+  </script>
+</body>
+</html>

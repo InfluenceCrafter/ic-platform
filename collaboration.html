@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Collaboration — InfluenceCrafter Creator Hub</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <div class="page" id="app"></div>
+  <div id="modal-root"></div>
+
+  <script src="js/db.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/ui.js"></script>
+  <script>
+    const ctx = requireRole(['creator']);
+    let db, user, profile, collab, campaign, brand;
+    let activeTab = 'overview';
+    const selectedFiles = {}; // taskId -> File
+
+    if (ctx) {
+      db = ctx.db; user = ctx.user; profile = currentCreatorProfile(db, user);
+      renderNav(null);
+      const id = new URLSearchParams(window.location.search).get('id');
+      collab = db.collaborations.find((c) => c.id === id && c.creatorId === profile.id);
+      if (!collab) {
+        document.getElementById('app').innerHTML = '<div class="card empty-state"><p>Collaboration not found.</p><a class="btn btn-primary" href="creator-dashboard.html">Back to dashboard</a></div>';
+      } else {
+        campaign = db.campaigns.find((c) => c.id === collab.campaignId);
+        brand = db.brands.find((b) => b.id === campaign.brandId);
+        render();
+      }
+    }
+
+    function reload() { db = loadDB(); collab = db.collaborations.find((c) => c.id === collab.id); }
+
+    function render() {
+      const progress = collaborationProgress(db, collab.id);
+      const tasks = db.tasks.filter((t) => t.collaborationId === collab.id);
+
+      document.getElementById('app').innerHTML = `
+        <a href="creator-dashboard.html" class="small">← Back to dashboard</a>
+        <div class="card-row" style="margin-top:10px;align-items:center;">
+          <div>
+            <h1 style="margin-bottom:2px;">${escapeHtml(campaign.title)}</h1>
+            <div class="muted small">${escapeHtml(brand.name)} · ${escapeHtml(campaign.city)}</div>
+          </div>
+          ${badge(collab.status)}
+        </div>
+
+        ${collab.status === 'invited' ? inviteBanner() : ''}
+
+        <div class="progress-bar" style="margin-top:14px;"><div style="width:${progress}%"></div></div>
+        <div class="muted small" style="margin-top:6px;">${progress}% complete</div>
+
+        <div class="tabs" style="margin-top:20px;">
+          ${['overview', 'brief', 'tasks', 'messages', 'activity'].map((t) => `<button class="${activeTab === t ? 'active' : ''}" onclick="switchTab('${t}')">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
+        </div>
+
+        <div id="tab-overview" class="tab-panel ${activeTab === 'overview' ? 'active' : ''}">${overviewTab(tasks)}</div>
+        <div id="tab-brief" class="tab-panel ${activeTab === 'brief' ? 'active' : ''}">${briefTab()}</div>
+        <div id="tab-tasks" class="tab-panel ${activeTab === 'tasks' ? 'active' : ''}">${tasksTab(tasks)}</div>
+        <div id="tab-messages" class="tab-panel ${activeTab === 'messages' ? 'active' : ''}">${messagesTab()}</div>
+        <div id="tab-activity" class="tab-panel ${activeTab === 'activity' ? 'active' : ''}">${activityTab()}</div>
+      `;
+    }
+
+    function switchTab(t) { activeTab = t; render(); }
+
+    function inviteBanner() {
+      return `
+        <div class="card" style="border-color:var(--gold);background:var(--orange-bg);">
+          <strong>You've been invited to this collaboration.</strong>
+          <p class="small" style="margin-top:6px;">Review the brief below, then accept or decline.</p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="btn btn-primary" onclick="acceptInvite()">Accept Invitation</button>
+            <button class="btn btn-ghost" onclick="openDeclineModal()">Decline</button>
+          </div>
+        </div>`;
+    }
+
+    function acceptInvite() {
+      reload();
+      collab.status = 'accepted';
+      collab.acceptedDate = nowISO();
+      const acceptTask = db.tasks.find((t) => t.collaborationId === collab.id && t.type === 'accept');
+      if (acceptTask) { acceptTask.status = 'completed'; acceptTask.completedDate = nowISO(); }
+      logActivity(db, { userId: user.id, entityType: 'collaboration', entityId: collab.id, action: 'Creator accepted invitation', campaignId: campaign.id });
+      saveDB(db);
+      toast('Invitation accepted.');
+      render();
+    }
+
+    function openDeclineModal() {
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">×</button>
+            <h2>Decline invitation</h2>
+            <p class="small">You don't need to give a detailed explanation — just pick the closest reason.</p>
+            <select id="decline-reason">
+              <option>Timing does not work</option>
+              <option>Campaign is not relevant</option>
+              <option>Location does not work</option>
+              <option>Deliverables do not work</option>
+              <option>Compensation does not work</option>
+              <option>Personal reason</option>
+              <option>Other</option>
+            </select>
+            <button class="btn btn-danger btn-block" style="margin-top:14px;" onclick="declineInvite()">Confirm Decline</button>
+          </div>
+        </div>`;
+    }
+
+    function declineInvite() {
+      reload();
+      const reason = document.getElementById('decline-reason').value;
+      collab.status = 'creator_withdrew';
+      db.tasks.filter((t) => t.collaborationId === collab.id).forEach((t) => { if (t.status === 'not_started') t.status = 'waived'; });
+      logActivity(db, { userId: user.id, entityType: 'collaboration', entityId: collab.id, action: 'Creator declined invitation', campaignId: campaign.id, meta: reason });
+      saveDB(db);
+      closeModal();
+      toast('Invitation declined.');
+      render();
+    }
+
+    function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+
+    /* ---------------- Overview ---------------- */
+    function overviewTab(tasks) {
+      const next = nextActionableTask(db, collab.id);
+      return `
+        <div class="grid grid-2">
+          <div class="card">
+            <h3>Collaboration details</h3>
+            <table>
+              <tr><td class="muted">Campaign period</td><td>${formatDate(campaign.campaignStart)} – ${formatDate(campaign.campaignEnd)}</td></tr>
+              <tr><td class="muted">Campaign manager</td><td>${escapeHtml(campaign.managerName)}</td></tr>
+              <tr><td class="muted">Compensation</td><td>${escapeHtml(campaign.compensation.type)} — ${escapeHtml(campaign.compensation.barterValue || '')}</td></tr>
+              <tr><td class="muted">Statistics deadline</td><td>${formatDate(collab.statisticsDeadline)}</td></tr>
+            </table>
+          </div>
+          <div class="card">
+            <h3>Main deliverables</h3>
+            ${campaign.deliverables.map((d) => `<div class="small">• ${d.quantity}× ${escapeHtml(d.type)}</div>`).join('')}
+            <hr class="divider" />
+            <h3>Next action</h3>
+            ${next ? `<p class="small">${escapeHtml(next.title)}${next.deadline ? ' — ' + formatDate(next.deadline) : ''}</p><button class="btn btn-primary btn-sm" onclick="switchTab('tasks')">Go to tasks</button>` : '<p class="small due-done">All done — nice work!</p>'}
+          </div>
+        </div>`;
+    }
+
+    /* ---------------- Brief ---------------- */
+    function briefTab() {
+      const b = campaign.brief;
+      const confirmTask = db.tasks.find((t) => t.collaborationId === collab.id && t.type === 'confirm_brief');
+      return `
+        <div class="card">
+          <div class="muted small">Last updated: ${formatDate(b.updatedAt)}</div>
+          <h3 style="margin-top:10px;">${escapeHtml(b.intro)}</h3>
+          <p>${escapeHtml(b.brandInfo)}</p>
+          <h4>Key messages</h4>
+          ${b.keyMessages.map((m) => `<div class="small">• ${escapeHtml(m)}</div>`).join('')}
+          <h4 style="margin-top:12px;">Content instructions</h4>
+          <p class="small">${escapeHtml(b.contentInstructions)}</p>
+          <h4>Tags &amp; hashtags</h4>
+          <p class="small">${b.mandatoryTags.map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join('')} ${b.mandatoryHashtags.map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</p>
+          <h4>What to avoid</h4>
+          <p class="small">${escapeHtml(b.whatToAvoid)}</p>
+          <h4>Disclosure</h4>
+          <p class="small">${escapeHtml(b.disclosureRequirements)}</p>
+          <h4>Usage rights</h4>
+          <p class="small">${escapeHtml(b.usageRights)}</p>
+          <hr class="divider" />
+          ${
+            confirmTask && confirmTask.status !== 'completed' && collab.status !== 'invited'
+              ? `<button class="btn btn-primary" onclick="completeSimpleTask('${confirmTask.id}')">Confirm brief</button>`
+              : confirmTask && confirmTask.status === 'completed'
+              ? '<div class="small due-done">✓ Brief confirmed</div>'
+              : ''
+          }
+        </div>`;
+    }
+
+    /* ---------------- Tasks ---------------- */
+    function tasksTab(tasks) {
+      if (collab.status === 'invited') return '<div class="card empty-state"><p>Accept the invitation above to unlock your task checklist.</p></div>';
+      return `<div class="card">${tasks.map((t) => taskRow(t)).join('')}</div>`;
+    }
+
+    function taskRow(t) {
+      const done = ['completed', 'approved', 'waived'].includes(t.status);
+      const blocked = t.status === 'changes_requested';
+      const urgency = t.deadline ? deadlineUrgency(t.deadline, done) : null;
+      return `
+        <div class="task-item">
+          <div class="task-check ${done ? 'done' : blocked ? 'blocked' : ''}">${done ? '✓' : blocked ? '!' : ''}</div>
+          <div style="flex:1;">
+            <div class="card-row">
+              <strong>${escapeHtml(t.title)}</strong>
+              ${badge(t.status)}
+            </div>
+            ${urgency ? `<div class="small ${urgency.cls}">${urgency.icon} ${urgency.label}</div>` : ''}
+            ${t.adminComment ? `<div class="small" style="color:var(--red-dark);margin-top:4px;">Admin: ${escapeHtml(t.adminComment)}</div>` : ''}
+            <div style="margin-top:8px;">${taskAction(t)}</div>
+          </div>
+        </div>`;
+    }
+
+    function taskAction(t) {
+      if (t.status === 'waived') return '<span class="muted small">Not required</span>';
+      switch (t.type) {
+        case 'accept':
+          return t.status === 'completed' ? '<span class="muted small">Accepted</span>' : '';
+        case 'read_brief':
+          return t.status === 'completed'
+            ? '<span class="muted small">Read</span>'
+            : `<button class="btn btn-secondary btn-sm" onclick="switchTab('brief')">Read brief</button> <button class="btn btn-primary btn-sm" onclick="completeSimpleTask('${t.id}')">Mark as read</button>`;
+        case 'confirm_brief':
+          return t.status === 'completed' ? '<span class="muted small">Confirmed</span>' : `<button class="btn btn-primary btn-sm" onclick="completeSimpleTask('${t.id}')">Confirm brief</button>`;
+        case 'visit_date':
+          return visitDateAction(t);
+        case 'visit':
+          return t.status === 'completed' ? '<span class="muted small">Visited</span>' : `<button class="btn btn-primary btn-sm" onclick="completeSimpleTask('${t.id}')">Mark venue visit complete</button>`;
+        case 'draft':
+          return draftAction(t);
+        case 'publish':
+          return publishAction(t);
+        case 'stats':
+          return statsAction(t);
+        case 'complete':
+          return t.status === 'completed' ? '<span class="small due-done">🎉 Collaboration completed</span>' : '<span class="muted small">Waiting on other tasks</span>';
+        default:
+          return '';
+      }
+    }
+
+    function completeSimpleTask(taskId) {
+      reload();
+      const t = db.tasks.find((x) => x.id === taskId);
+      t.status = 'completed';
+      t.completedDate = nowISO();
+      logActivity(db, { userId: user.id, entityType: 'task', entityId: t.id, action: `Task completed: ${t.title}`, campaignId: campaign.id });
+      maybeCompleteCollaboration(db, collab.id);
+      saveDB(db);
+      render();
+    }
+
+    function visitDateAction(t) {
+      if (t.status === 'submitted' || t.status === 'under_review') {
+        return `<div class="small">Requested: ${formatDate(collab.visitDate)} — awaiting approval</div>`;
+      }
+      if (t.status === 'completed' || t.status === 'approved') {
+        return `<div class="small due-done">Confirmed for ${formatDate(collab.visitDate)}</div>`;
+      }
+      return `
+        <div class="grid grid-2">
+          <div><label>Preferred date</label><input type="date" id="visit-date-${t.id}" /></div>
+          <div><label>+1?</label>
+            <div class="checkbox-row"><input type="checkbox" id="visit-plusone-${t.id}" /><label for="visit-plusone-${t.id}">Bringing a +1</label></div>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="submitVisitDate('${t.id}')">Submit visit date</button>`;
+    }
+
+    function submitVisitDate(taskId) {
+      reload();
+      const dateVal = document.getElementById(`visit-date-${taskId}`).value;
+      if (!dateVal) { toast('Please choose a date.'); return; }
+      const t = db.tasks.find((x) => x.id === taskId);
+      collab.visitDate = new Date(dateVal).toISOString();
+      collab.visitStatus = 'date_requested';
+      t.status = 'submitted';
+      logActivity(db, { userId: user.id, entityType: 'task', entityId: t.id, action: 'Creator selected visit date', campaignId: campaign.id });
+      db.users.filter((u) => u.role === 'admin').forEach((a) => addNotification(db, { userId: a.id, type: 'campaign', title: 'Visit date requested', message: `${user.firstName} requested ${formatDate(collab.visitDate)} for ${campaign.title}.`, campaignId: campaign.id }));
+      saveDB(db);
+      toast('Visit date submitted for approval.');
+      render();
+    }
+
+    function draftAction(t) {
+      if (t.status === 'submitted' || t.status === 'under_review') return '<div class="small">Draft submitted — awaiting review.</div>';
+      if (t.status === 'completed' || t.status === 'approved') return '<div class="small due-done">✓ Draft approved</div>';
+      return `
+        <div class="upload-area">
+          <input type="file" id="draft-file-${t.id}" accept=".mp4,.mov,.jpg,.jpeg,.png,.pdf,.zip" onchange="selectedFiles['${t.id}']=this.files[0]" />
+          <p class="field-hint">MP4, MOV, JPG, PNG, PDF or ZIP.</p>
+        </div>
+        <label>Note for the reviewer (optional)</label>
+        <textarea id="draft-note-${t.id}"></textarea>
+        <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="submitDraft('${t.id}')">Upload Content</button>`;
+    }
+
+    function submitDraft(taskId) {
+      reload();
+      const file = selectedFiles[taskId];
+      if (!file) { toast('Please choose a file first.'); return; }
+      const t = db.tasks.find((x) => x.id === taskId);
+      const version = db.contentSubmissions.filter((s) => s.collaborationId === collab.id && s.taskId === taskId).length + 1;
+      const submission = {
+        id: uid('sub'),
+        collaborationId: collab.id,
+        taskId,
+        version,
+        fileName: file.name,
+        fileSize: file.size,
+        note: document.getElementById(`draft-note-${taskId}`).value,
+        status: 'submitted',
+        submittedAt: nowISO(),
+        reviewerComment: '',
+      };
+      db.contentSubmissions.push(submission);
+      t.status = 'submitted';
+      t.adminComment = '';
+      logActivity(db, { userId: user.id, entityType: 'content', entityId: submission.id, action: `Content uploaded (v${version}): ${file.name}`, campaignId: campaign.id });
+      db.users.filter((u) => u.role === 'admin').forEach((a) => addNotification(db, { userId: a.id, type: 'campaign', title: 'New content submission', message: `${user.firstName} uploaded a draft for ${campaign.title}.`, campaignId: campaign.id }));
+      saveDB(db);
+      toast('Content uploaded for review.');
+      delete selectedFiles[taskId];
+      render();
+    }
+
+    function publishAction(t) {
+      if (t.status === 'completed') return '<div class="small due-done">✓ Published</div>';
+      return `
+        <div class="grid grid-2">
+          <div><label>Platform</label><select id="pub-platform-${t.id}"><option>Instagram</option><option>TikTok</option><option>YouTube</option></select></div>
+          <div><label>Published URL</label><input type="url" id="pub-url-${t.id}" placeholder="https://instagram.com/..." required /></div>
+        </div>
+        <div class="checkbox-row"><input type="checkbox" id="pub-disclosure-${t.id}" /><label for="pub-disclosure-${t.id}">Disclosure included (#ad / #gifted)</label></div>
+        <div class="checkbox-row"><input type="checkbox" id="pub-tagged-${t.id}" /><label for="pub-tagged-${t.id}">Brand tagged</label></div>
+        <button class="btn btn-primary btn-sm" onclick="submitPublish('${t.id}')">Add Published Link</button>`;
+    }
+
+    function submitPublish(taskId) {
+      reload();
+      const url = document.getElementById(`pub-url-${taskId}`).value.trim();
+      if (!url) { toast('A published URL is required.'); return; }
+      const t = db.tasks.find((x) => x.id === taskId);
+      const published = {
+        id: uid('pub'),
+        collaborationId: collab.id,
+        platform: document.getElementById(`pub-platform-${taskId}`).value,
+        url,
+        publishedDate: nowISO(),
+        disclosure: document.getElementById(`pub-disclosure-${taskId}`).checked,
+        brandTagged: document.getElementById(`pub-tagged-${taskId}`).checked,
+      };
+      db.publishedContent.push(published);
+      collab.publicationDate = nowISO();
+      t.status = 'completed';
+      t.completedDate = nowISO();
+      logActivity(db, { userId: user.id, entityType: 'published_content', entityId: published.id, action: 'Published link added', campaignId: campaign.id });
+      maybeCompleteCollaboration(db, collab.id);
+      saveDB(db);
+      toast('Published link added.');
+      render();
+    }
+
+    function statsAction(t) {
+      if (t.status === 'submitted' || t.status === 'under_review') return '<div class="small">Statistics submitted — awaiting approval.</div>';
+      if (t.status === 'completed' || t.status === 'approved') return '<div class="small due-done">✓ Statistics approved</div>';
+      return `
+        <p class="field-hint">Please upload your statistics 72 hours after publication.</p>
+        <div class="grid grid-2">
+          <div><label>Views</label><input type="number" min="0" id="stat-views-${t.id}" required /></div>
+          <div><label>Reach</label><input type="number" min="0" id="stat-reach-${t.id}" /></div>
+          <div><label>Likes</label><input type="number" min="0" id="stat-likes-${t.id}" /></div>
+          <div><label>Comments</label><input type="number" min="0" id="stat-comments-${t.id}" /></div>
+        </div>
+        <div class="upload-area" style="margin-top:10px;">
+          <input type="file" id="stat-file-${t.id}" accept=".jpg,.jpeg,.png,.pdf" onchange="selectedFiles['${t.id}']=this.files[0]" />
+          <p class="field-hint">Screenshot of statistics (required).</p>
+        </div>
+        <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="submitStats('${t.id}')">Upload Statistics</button>`;
+    }
+
+    function submitStats(taskId) {
+      reload();
+      const views = document.getElementById(`stat-views-${taskId}`).value;
+      const file = selectedFiles[taskId];
+      if (!views || !file) { toast('Views and a screenshot are required.'); return; }
+      const t = db.tasks.find((x) => x.id === taskId);
+      const stat = {
+        id: uid('stat'),
+        collaborationId: collab.id,
+        views: Number(views),
+        reach: Number(document.getElementById(`stat-reach-${taskId}`).value || 0),
+        likes: Number(document.getElementById(`stat-likes-${taskId}`).value || 0),
+        comments: Number(document.getElementById(`stat-comments-${taskId}`).value || 0),
+        screenshotName: file.name,
+        submittedAt: nowISO(),
+        status: 'submitted',
+      };
+      db.statistics.push(stat);
+      t.status = 'submitted';
+      logActivity(db, { userId: user.id, entityType: 'statistics', entityId: stat.id, action: 'Statistics submitted', campaignId: campaign.id });
+      db.users.filter((u) => u.role === 'admin').forEach((a) => addNotification(db, { userId: a.id, type: 'statistics', title: 'Statistics submitted', message: `${user.firstName} submitted statistics for ${campaign.title}.`, campaignId: campaign.id }));
+      saveDB(db);
+      toast('Statistics submitted.');
+      delete selectedFiles[taskId];
+      render();
+    }
+
+    /* ---------------- Messages ---------------- */
+    function messagesTab() {
+      const msgs = db.messages.filter((m) => m.collaborationId === collab.id).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      return `
+        <div class="card">
+          ${msgs.length === 0 ? '<p class="muted small">No messages yet. Ask a question about the brief, visit date or anything else.</p>' : msgs.map((m) => messageBubble(m)).join('')}
+          <hr class="divider" />
+          <textarea id="new-message" placeholder="Write a message to the InfluenceCrafter team..."></textarea>
+          <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="sendMessage()">Send</button>
+        </div>`;
+    }
+
+    function messageBubble(m) {
+      const sender = db.users.find((u) => u.id === m.senderId);
+      const mine = m.senderId === user.id;
+      return `<div style="margin-bottom:10px;${mine ? 'text-align:right;' : ''}">
+        <div class="muted small">${escapeHtml(sender ? sender.firstName : 'Unknown')} · ${formatDate(m.timestamp)}</div>
+        <div class="small" style="display:inline-block;background:${mine ? 'var(--grey-bg)' : 'var(--orange-bg)'};padding:8px 12px;border-radius:10px;margin-top:2px;">${escapeHtml(m.text)}</div>
+      </div>`;
+    }
+
+    function sendMessage() {
+      reload();
+      const text = document.getElementById('new-message').value.trim();
+      if (!text) return;
+      db.messages.push({ id: uid('msg'), collaborationId: collab.id, senderId: user.id, text, timestamp: nowISO(), read: false });
+      db.users.filter((u) => u.role === 'admin').forEach((a) => addNotification(db, { userId: a.id, type: 'campaign', title: 'New campaign message', message: `${user.firstName}: ${text.slice(0, 60)}`, campaignId: campaign.id }));
+      saveDB(db);
+      render();
+    }
+
+    /* ---------------- Activity ---------------- */
+    function activityTab() {
+      const logs = db.activityLog.filter((l) => l.campaignId === campaign.id).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      if (logs.length === 0) return '<div class="card empty-state"><p>No activity yet.</p></div>';
+      return `<div class="card">${logs.map((l) => `<div class="task-item"><div style="flex:1;"><div class="small">${escapeHtml(l.action)}</div><div class="muted small">${formatDate(l.timestamp)}</div></div></div>`).join('')}</div>`;
+    }
+  </script>
+</body>
+</html>

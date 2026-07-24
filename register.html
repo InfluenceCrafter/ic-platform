@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Register — InfluenceCrafter Creator Hub</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="auth-logo">InfluenceCrafter <span>CREATOR HUB</span></div>
+      <div class="card">
+        <h1>Join as a creator</h1>
+        <p>Tell us a bit about you. Your account will be reviewed by our team before you can access collaborations.</p>
+        <div id="msg"></div>
+        <form id="register-form">
+          <div class="grid grid-2">
+            <div>
+              <label for="firstName">First name</label>
+              <input id="firstName" required />
+            </div>
+            <div>
+              <label for="lastName">Last name</label>
+              <input id="lastName" required />
+            </div>
+          </div>
+          <label for="email">Email address</label>
+          <input type="email" id="email" required />
+          <label for="password">Password</label>
+          <input type="password" id="password" required minlength="6" />
+          <label for="instagram">Instagram username</label>
+          <input id="instagram" placeholder="@yourname" required />
+          <div class="grid grid-2">
+            <div>
+              <label for="city">Primary city</label>
+              <input id="city" required />
+            </div>
+            <div>
+              <label for="country">Country</label>
+              <input id="country" required />
+            </div>
+          </div>
+          <label for="language">Preferred content language</label>
+          <select id="language" required>
+            <option value="English">English</option>
+            <option value="Czech">Czech</option>
+            <option value="Russian">Russian</option>
+          </select>
+          <div class="checkbox-row" style="margin-top:16px;">
+            <input type="checkbox" id="terms" required />
+            <label for="terms">I agree to the Terms and Conditions and Privacy Policy</label>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block" style="margin-top:12px;">Create Account</button>
+        </form>
+        <p class="small" style="margin-top:16px;text-align:center;">
+          Already have an account? <a href="login.html">Log in</a>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/db.js"></script>
+  <script src="js/auth.js"></script>
+  <script>
+    document.getElementById('register-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const fields = {
+        firstName: document.getElementById('firstName').value.trim(),
+        lastName: document.getElementById('lastName').value.trim(),
+        email: document.getElementById('email').value.trim(),
+        password: document.getElementById('password').value,
+        instagramUsername: document.getElementById('instagram').value.trim(),
+        city: document.getElementById('city').value.trim(),
+        country: document.getElementById('country').value.trim(),
+        language: document.getElementById('language').value,
+      };
+      const result = registerCreator(fields);
+      const msg = document.getElementById('msg');
+      if (!result.ok) {
+        msg.innerHTML = `<div class="error-msg">${result.error}</div>`;
+        return;
+      }
+      document.getElementById('register-form').style.display = 'none';
+      msg.innerHTML = `<div class="success-msg">
+        <strong>Welcome to InfluenceCrafter Creator Hub.</strong><br />
+        We've received your registration and it's now being reviewed. You'll get an email as soon as your profile is approved.
+      </div>
+      <a class="btn btn-secondary btn-block" href="login.html">Back to log in</a>`;
+    });
+  </script>
+</body>
+</html>

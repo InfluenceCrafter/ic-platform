@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dashboard — InfluenceCrafter Creator Hub</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <div class="page" id="app"></div>
+
+  <script src="js/db.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/ui.js"></script>
+  <script>
+    const ctx = requireRole(['creator']);
+    if (ctx) render(ctx.db, ctx.user);
+
+    function render(db, user) {
+      renderNav('creator-dashboard.html');
+      const profile = currentCreatorProfile(db, user);
+      const collabs = db.collaborations.filter((c) => c.creatorId === profile.id && !['completed', 'cancelled', 'withdrawn'].includes(c.status));
+      const openCampaigns = db.campaigns.filter((c) => c.status === 'open_for_applications' || c.status === 'closing_soon');
+      const myAppliedCampaignIds = new Set(db.applications.filter((a) => a.creatorId === profile.id).map((a) => a.campaignId));
+      const recommended = openCampaigns.filter((c) => !myAppliedCampaignIds.has(c.id)).slice(0, 3);
+      const notifs = db.notifications
+        .filter((n) => n.userId === user.id)
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .slice(0, 5);
+      const completeness = profileCompleteness(profile);
+
+      // Upcoming deadlines: nearest actionable task per active collaboration
+      const deadlineRows = [];
+      collabs.forEach((collab) => {
+        const campaign = db.campaigns.find((c) => c.id === collab.campaignId);
+        const task = nextActionableTask(db, collab.id);
+        if (task && task.deadline) {
+          deadlineRows.push({ collab, campaign, task });
+        }
+      });
+      deadlineRows.sort((a, b) => new Date(a.task.deadline) - new Date(b.task.deadline));
+
+      document.getElementById('app').innerHTML = `
+        <div class="card" style="background:var(--ink);color:#fff;border:none;">
+          <h1 style="color:#fff;">Welcome back, ${escapeHtml(user.firstName)}.</h1>
+          <p style="color:#e8e2d8;">You have ${collabs.length} active collaboration${collabs.length === 1 ? '' : 's'}
+          and ${deadlineRows.length} upcoming deadline${deadlineRows.length === 1 ? '' : 's'}.</p>
+        </div>
+
+        <h2>Upcoming deadlines</h2>
+        ${
+          deadlineRows.length === 0
+            ? emptyState('No upcoming deadlines right now.', null)
+            : deadlineRows
+                .map(({ collab, campaign, task }) => {
+                  const urgency = deadlineUrgency(task.deadline, false);
+                  return `
+                  <div class="card">
+                    <div class="card-row">
+                      <div>
+                        <strong>${escapeHtml(campaign.title)}</strong>
+                        <div class="muted small">${escapeHtml(task.title)} · ${formatDate(task.deadline)}</div>
+                      </div>
+                      <div style="text-align:right;">
+                        <div class="${urgency.cls}">${urgency.icon} ${urgency.label}</div>
+                        <a class="btn btn-primary btn-sm" style="margin-top:8px;" href="collaboration.html?id=${collab.id}">Open collaboration</a>
+                      </div>
+                    </div>
+                  </div>`;
+                })
+                .join('')
+        }
+
+        <h2 style="margin-top:24px;">Active collaborations</h2>
+        ${
+          collabs.length === 0
+            ? emptyState('No active collaborations yet. When you are selected for a campaign, it will appear here.', 'opportunities.html', 'Browse opportunities')
+            : `<div class="grid grid-2">${collabs
+                .map((collab) => {
+                  const campaign = db.campaigns.find((c) => c.id === collab.campaignId);
+                  const progress = collaborationProgress(db, collab.id);
+                  const task = nextActionableTask(db, collab.id);
+                  return `
+                  <div class="card">
+                    <div class="card-row">
+                      <div>
+                        <strong>${escapeHtml(campaign.title)}</strong>
+                        <div class="muted small">${escapeHtml(campaign.collaborationType)}</div>
+                      </div>
+                      ${badge(collab.status)}
+                    </div>
+                    <div class="muted small" style="margin:10px 0 4px;">Next: ${task ? escapeHtml(task.title) : 'All tasks done'}</div>
+                    <div class="progress-bar"><div style="width:${progress}%"></div></div>
+                    <div class="muted small" style="margin-top:6px;">${progress}% complete</div>
+                    <a class="btn btn-secondary btn-block" style="margin-top:12px;" href="collaboration.html?id=${collab.id}">View collaboration</a>
+                  </div>`;
+                })
+                .join('')}</div>`
+        }
+
+        <h2 style="margin-top:24px;">Open opportunities for you</h2>
+        ${
+          recommended.length === 0
+            ? emptyState('No new opportunities right now — check back soon.', null)
+            : `<div class="grid grid-3">${recommended.map((c) => opportunityMini(c, db, profile)).join('')}</div>`
+        }
+        <div style="text-align:center;margin-top:8px;"><a href="opportunities.html">View all opportunities →</a></div>
+
+        <div class="grid grid-2" style="margin-top:24px;">
+          <div class="card">
+            <h3>Recent notifications</h3>
+            ${
+              notifs.length === 0
+                ? '<p class="muted small">No notifications yet.</p>'
+                : notifs
+                    .map(
+                      (n) => `
+                    <div class="notif-item ${n.read ? '' : 'unread'}">
+                      <div class="notif-dot" style="visibility:${n.read ? 'hidden' : 'visible'};"></div>
+                      <div>
+                        <div>${escapeHtml(n.title)}</div>
+                        <div class="muted small">${escapeHtml(n.message)}</div>
+                      </div>
+                    </div>`
+                    )
+                    .join('')
+            }
+          </div>
+          <div class="card">
+            <h3>Profile completeness</h3>
+            <div class="progress-bar"><div style="width:${completeness.pct}%"></div></div>
+            <p class="small" style="margin-top:8px;">Your profile is ${completeness.pct}% complete.</p>
+            ${
+              completeness.missing.length
+                ? `<p class="small">Missing: ${completeness.missing.join(', ')}</p><a class="btn btn-secondary btn-sm" href="profile.html">Complete profile</a>`
+                : '<p class="small">Nice — your profile is fully filled out.</p>'
+            }
+          </div>
+        </div>
+      `;
+    }
+
+    function emptyState(text, href, label) {
+      return `<div class="card empty-state">
+        <p>${text}</p>
+        ${href ? `<a class="btn btn-primary" href="${href}">${label}</a>` : ''}
+      </div>`;
+    }
+
+    function opportunityMini(campaign, db, profile) {
+      const brand = db.brands.find((b) => b.id === campaign.brandId);
+      const elig = checkEligibility(campaign, profile);
+      return `
+      <div class="card">
+        <strong>${escapeHtml(campaign.title)}</strong>
+        <div class="muted small">${escapeHtml(brand.name)} · ${escapeHtml(campaign.city)}</div>
+        <p class="small" style="margin-top:8px;">${escapeHtml(campaign.shortDescription)}</p>
+        <div class="small ${elig.eligible ? 'due-done' : 'due-soon'}">${elig.eligible ? '✓ You match' : '⚠ Check requirements'}</div>
+        <a class="btn btn-secondary btn-block" style="margin-top:10px;" href="opportunities.html?campaign=${campaign.id}">View details</a>
+      </div>`;
+    }
+  </script>
+</body>
+</html>

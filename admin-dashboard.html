@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Admin Dashboard — InfluenceCrafter Creator Hub</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <div class="page" id="app"></div>
+  <div id="modal-root"></div>
+
+  <script src="js/db.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/ui.js"></script>
+  <script>
+    const ctx = requireRole(['admin']);
+    let db, user;
+    let activeTab = 'overview';
+    if (ctx) { db = ctx.db; user = ctx.user; renderNav('admin-dashboard.html'); render(); }
+
+    function reload() { db = loadDB(); }
+
+    function render() {
+      document.getElementById('app').innerHTML = `
+        <h1>Admin Dashboard</h1>
+        <div class="tabs">
+          ${tabs().map(([key, label]) => `<button class="${activeTab === key ? 'active' : ''}" onclick="switchTab('${key}')">${label}</button>`).join('')}
+        </div>
+        <div id="tab-content"></div>
+      `;
+      document.getElementById('tab-content').innerHTML = renderTab();
+    }
+
+    function tabs() {
+      return [
+        ['overview', 'Overview'],
+        ['applications', `Applications${countBadge(pendingApplications().length)}`],
+        ['creators', `Creators${countBadge(pendingCreators().length)}`],
+        ['campaigns', 'Campaigns'],
+        ['review', `Review Queue${countBadge(reviewQueue().length)}`],
+        ['reports', 'Reports'],
+        ['activity', 'Activity Log'],
+      ];
+    }
+
+    function countBadge(n) { return n > 0 ? ` (${n})` : ''; }
+    function switchTab(t) { activeTab = t; render(); }
+
+    function renderTab() {
+      switch (activeTab) {
+        case 'overview': return overviewTab();
+        case 'applications': return applicationsTab();
+        case 'creators': return creatorsTab();
+        case 'campaigns': return campaignsTab();
+        case 'review': return reviewTab();
+        case 'reports': return reportsTab();
+        case 'activity': return activityTab();
+      }
+    }
+
+    /* ---------------- helpers ---------------- */
+    function pendingApplications() { return db.applications.filter((a) => a.status === 'submitted' || a.status === 'under_review'); }
+    function pendingCreators() { return db.users.filter((u) => u.role === 'creator' && u.status === 'pending_approval'); }
+    function reviewQueue() { return db.tasks.filter((t) => t.status === 'submitted' && t.adminApproval); }
+    function overdueTasks() {
+      return db.tasks.filter((t) => t.deadline && daysUntil(t.deadline) < 0 && !['completed', 'approved', 'waived'].includes(t.status));
+    }
+    function creatorName(creatorId) {
+      const p = db.creatorProfiles.find((x) => x.id === creatorId);
+      const u = p ? db.users.find((x) => x.id === p.userId) : null;
+      return u ? `${u.firstName} ${u.lastName}` : 'Unknown';
+    }
+    function campaignOf(collabId) {
+      const c = db.collaborations.find((x) => x.id === collabId);
+      return c ? db.campaigns.find((x) => x.id === c.campaignId) : null;
+    }
+
+    /* ---------------- Overview ---------------- */
+    function overviewTab() {
+      const activeCampaigns = db.campaigns.filter((c) => ['active', 'open_for_applications', 'closing_soon', 'selecting_creators'].includes(c.status));
+      const openCampaigns = db.campaigns.filter((c) => c.status === 'open_for_applications');
+      const contentAwaiting = db.tasks.filter((t) => t.type === 'draft' && t.status === 'submitted').length;
+      const statsAwaiting = db.tasks.filter((t) => t.type === 'stats' && t.status === 'submitted').length;
+      const overdue = overdueTasks();
+
+      const tiles = [
+        ['Active campaigns', activeCampaigns.length],
+        ['Open campaigns', openCampaigns.length],
+        ['Pending applications', pendingApplications().length],
+        ['Creators awaiting approval', pendingCreators().length],
+        ['Overdue tasks', overdue.length],
+        ['Content awaiting review', contentAwaiting],
+        ['Statistics awaiting review', statsAwaiting],
+      ];
+
+      const attention = [];
+      const noVisitDate = db.tasks.filter((t) => t.type === 'visit_date' && t.status === 'not_started');
+      if (noVisitDate.length) attention.push(`${noVisitDate.length} creator${noVisitDate.length === 1 ? ' has' : 's have'} not selected a visit date.`);
+      if (overdue.length) attention.push(`${overdue.length} task${overdue.length === 1 ? ' is' : 's are'} overdue.`);
+      if (contentAwaiting) attention.push(`${contentAwaiting} content submission${contentAwaiting === 1 ? '' : 's'} waiting for approval.`);
+      if (statsAwaiting) attention.push(`${statsAwaiting} statistics submission${statsAwaiting === 1 ? '' : 's'} waiting for approval.`);
+      openCampaigns.forEach((c) => {
+        const approvedCount = db.collaborations.filter((col) => col.campaignId === c.id && !['cancelled', 'creator_withdrew'].includes(col.status)).length;
+        const remaining = c.capacity - approvedCount;
+        const d = daysUntil(c.applicationDeadline);
+        if (d <= 3 && d >= 0 && remaining > 0) attention.push(`"${c.title}" closes in ${d}d and still has ${remaining} open place${remaining === 1 ? '' : 's'}.`);
+      });
+
+      return `
+        <div class="grid grid-3">
+          ${tiles.map(([label, num]) => `<div class="stat-tile"><div class="num">${num}</div><div class="label">${label}</div></div>`).join('')}
+        </div>
+        <div class="grid grid-2" style="margin-top:16px;">
+          <div class="card">
+            <h3>Quick actions</h3>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;">
+              <button class="btn btn-primary btn-sm" onclick="openCreateCampaign()">Create Campaign</button>
+              <button class="btn btn-secondary btn-sm" onclick="switchTab('applications')">Review Applications</button>
+              <button class="btn btn-secondary btn-sm" onclick="switchTab('review')">Review Content</button>
+              <button class="btn btn-secondary btn-sm" onclick="switchTab('reports')">Export Report</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Needs attention</h3>
+            ${attention.length === 0 ? '<p class="small muted">Nothing urgent right now.</p>' : attention.map((a) => `<div class="small" style="padding:6px 0;border-bottom:1px solid var(--line);">⚠ ${escapeHtml(a)}</div>`).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    /* ---------------- Applications ---------------- */
+    function applicationsTab() {
+      const apps = [...db.applications].sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
+      if (apps.length === 0) return '<div class="card empty-state"><p>No applications yet.</p></div>';
+      return `<div class="card table-wrap"><table>
+        <tr><th>Creator</th><th>Campaign</th><th>Preferred date</th><th>Submitted</th><th>Status</th><th></th></tr>
+        ${apps.map((a) => {
+          const campaign = db.campaigns.find((c) => c.id === a.campaignId);
+          const profile = db.creatorProfiles.find((p) => p.id === a.creatorId);
+          const cName = creatorName(a.creatorId);
+          return `<tr>
+            <td>${escapeHtml(cName)}<div class="muted small">${escapeHtml(profile.instagramUsername)}</div></td>
+            <td>${escapeHtml(campaign.title)}</td>
+            <td>${a.preferredDate ? formatDate(a.preferredDate) : '—'}</td>
+            <td>${formatDate(a.submittedAt)}</td>
+            <td>${badge(a.status)}</td>
+            <td>${
+              a.status === 'submitted' || a.status === 'under_review'
+                ? `<button class="btn btn-success btn-sm" onclick="approveApplication('${a.id}')">Approve</button>
+                   <button class="btn btn-danger btn-sm" onclick="rejectApplication('${a.id}')">Reject</button>`
+                : a.collaborationId
+                ? `<a class="small" href="#" onclick="alert('Open the creator\\'s collaboration workspace as them to view live.');return false;">View</a>`
+                : ''
+            }</td>
+          </tr>`;
+        }).join('')}
+      </table></div>`;
+    }
+
+    function approveApplication(appId) {
+      reload();
+      const app = db.applications.find((a) => a.id === appId);
+      const campaign = db.campaigns.find((c) => c.id === app.campaignId);
+      const collab = createCollaboration(db, { campaignId: app.campaignId, creatorId: app.creatorId, autoAccept: true });
+      app.status = 'approved';
+      app.reviewedAt = nowISO();
+      app.reviewer = user.id;
+      app.collaborationId = collab.id;
+      const profile = db.creatorProfiles.find((p) => p.id === app.creatorId);
+      const creatorUser = db.users.find((u) => u.id === profile.userId);
+      addNotification(db, { userId: creatorUser.id, type: 'application', title: 'Application approved', message: `You have been selected for ${campaign.title}.`, campaignId: campaign.id });
+      logActivity(db, { userId: user.id, entityType: 'application', entityId: app.id, action: 'Application approved', campaignId: campaign.id });
+      saveDB(db);
+      toast('Application approved — collaboration created.');
+      render();
+    }
+
+    function rejectApplication(appId) {
+      reload();
+      const app = db.applications.find((a) => a.id === appId);
+      const campaign = db.campaigns.find((c) => c.id === app.campaignId);
+      app.status = 'rejected';
+      app.reviewedAt = nowISO();
+      app.reviewer = user.id;
+      const profile = db.creatorProfiles.find((p) => p.id === app.creatorId);
+      const creatorUser = db.users.find((u) => u.id === profile.userId);
+      addNotification(db, { userId: creatorUser.id, type: 'application', title: 'Application update', message: `Thank you for your interest in ${campaign.title}. We are unable to include you this time, but we'd love to consider you for future opportunities.`, campaignId: campaign.id });
+      logActivity(db, { userId: user.id, entityType: 'application', entityId: app.id, action: 'Application rejected', campaignId: campaign.id });
+      saveDB(db);
+      toast('Application rejected.');
+      render();
+    }
+
+    /* ---------------- Creators ---------------- */
+    function creatorsTab() {
+      const creators = db.users.filter((u) => u.role === 'creator');
+      return `
+      <button class="btn btn-primary" style="margin-bottom:14px;" onclick="openAddCreator()">+ Add Blogger</button>
+      <div class="card table-wrap"><table>
+        <tr><th>Name</th><th>City</th><th>Instagram</th><th>Followers</th><th>Status</th><th></th></tr>
+        ${creators.map((u) => {
+          const p = db.creatorProfiles.find((x) => x.userId === u.id);
+          return `<tr>
+            <td>${escapeHtml(u.firstName)} ${escapeHtml(u.lastName)}<div class="muted small">${escapeHtml(u.email)}</div></td>
+            <td>${escapeHtml(p.city || '—')}</td>
+            <td>${escapeHtml(p.instagramUsername || '—')}</td>
+            <td>${(p.social.instagram.followers || 0).toLocaleString()}</td>
+            <td>${badge(u.status)}</td>
+            <td>
+              ${u.status === 'pending_approval'
+                ? `<button class="btn btn-success btn-sm" onclick="approveCreator('${u.id}')">Approve</button> <button class="btn btn-danger btn-sm" onclick="rejectCreator('${u.id}')">Reject</button>`
+                : u.status === 'approved'
+                ? `<button class="btn btn-secondary btn-sm" onclick="openInvite('${p.id}')">Invite to Campaign</button> <button class="btn btn-ghost btn-sm" onclick="suspendCreator('${u.id}')">Suspend</button>`
+                : u.status === 'suspended'
+                ? `<button class="btn btn-secondary btn-sm" onclick="reactivateCreator('${u.id}')">Reactivate</button>`
+                : ''}
+            </td>
+          </tr>`;
+        }).join('')}
+      </table></div>`;
+    }
+
+    function approveCreator(userId) {
+      reload();
+      const u = db.users.find((x) => x.id === userId);
+      u.status = 'approved';
+      addNotification(db, { userId: u.id, type: 'account', title: 'Account approved', message: 'Your InfluenceCrafter Creator Hub account has been approved. You can now browse and apply for collaborations.' });
+      logActivity(db, { userId: user.id, entityType: 'user', entityId: u.id, action: 'Admin approved creator' });
+      saveDB(db);
+      toast('Creator approved.');
+      render();
+    }
+
+    function rejectCreator(userId) {
+      reload();
+      const u = db.users.find((x) => x.id === userId);
+      u.status = 'rejected';
+      logActivity(db, { userId: user.id, entityType: 'user', entityId: u.id, action: 'Admin rejected creator' });
+      saveDB(db);
+      toast('Creator rejected.');
+      render();
+    }
+
+    function suspendCreator(userId) {
+      reload();
+      const u = db.users.find((x) => x.id === userId);
+      u.status = 'suspended';
+      logActivity(db, { userId: user.id, entityType: 'user', entityId: u.id, action: 'Admin suspended creator' });
+      saveDB(db);
+      toast('Creator suspended.');
+      render();
+    }
+
+    function reactivateCreator(userId) {
+      reload();
+      const u = db.users.find((x) => x.id === userId);
+      u.status = 'approved';
+      logActivity(db, { userId: user.id, entityType: 'user', entityId: u.id, action: 'Admin reactivated creator' });
+      saveDB(db);
+      toast('Creator reactivated.');
+      render();
+    }
+
+    function openAddCreator() {
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">×</button>
+            <h2>Add blogger</h2>
+            <p class="small muted">Creates an approved account directly — no self-registration needed. Share the generated password with the blogger.</p>
+            <label>First name</label>
+            <input id="ac-first" required />
+            <label>Last name</label>
+            <input id="ac-last" required />
+            <label>Email</label>
+            <input id="ac-email" type="email" required />
+            <label>Instagram username</label>
+            <input id="ac-instagram" placeholder="@yourname" />
+            <label>City</label>
+            <input id="ac-city" />
+            <label>Country</label>
+            <input id="ac-country" />
+            <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitAddCreator()">Create account</button>
+          </div>
+        </div>`;
+    }
+
+    function submitAddCreator() {
+      reload();
+      const fields = {
+        firstName: document.getElementById('ac-first').value.trim(),
+        lastName: document.getElementById('ac-last').value.trim(),
+        email: document.getElementById('ac-email').value.trim(),
+        instagramUsername: document.getElementById('ac-instagram').value.trim(),
+        city: document.getElementById('ac-city').value.trim(),
+        country: document.getElementById('ac-country').value.trim(),
+        password: generatePassword(),
+      };
+      if (!fields.firstName || !fields.lastName || !fields.email) { toast('First name, last name and email are required.'); return; }
+      const result = adminCreateCreator(db, fields);
+      if (!result.ok) { toast(result.error); return; }
+      logActivity(db, { userId: user.id, entityType: 'user', entityId: result.userId, action: 'Admin created creator account' });
+      saveDB(db);
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">×</button>
+            <h2>Account created</h2>
+            <p class="small">Share these login details with ${escapeHtml(fields.firstName)}:</p>
+            <div class="card small" style="margin-top:10px;">
+              <div><strong>Email:</strong> ${escapeHtml(fields.email)}</div>
+              <div><strong>Password:</strong> ${escapeHtml(fields.password)}</div>
+            </div>
+            <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="closeModal()">Done</button>
+          </div>
+        </div>`;
+      render();
+    }
+
+    function openInvite(creatorProfileId) {
+      const openCampaigns = db.campaigns.filter((c) => c.status !== 'archived' && c.status !== 'cancelled');
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">×</button>
+            <h2>Invite to campaign</h2>
+            <label>Campaign</label>
+            <select id="invite-campaign">${openCampaigns.map((c) => `<option value="${c.id}">${escapeHtml(c.title)}</option>`).join('')}</select>
+            <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="sendInvite('${creatorProfileId}')">Send Invitation</button>
+          </div>
+        </div>`;
+    }
+
+    function sendInvite(creatorProfileId) {
+      reload();
+      const campaignId = document.getElementById('invite-campaign').value;
+      const campaign = db.campaigns.find((c) => c.id === campaignId);
+      const existing = db.collaborations.find((c) => c.campaignId === campaignId && c.creatorId === creatorProfileId);
+      if (existing) { toast('This creator already has a collaboration on this campaign.'); closeModal(); return; }
+      const collab = createCollaboration(db, { campaignId, creatorId: creatorProfileId, autoAccept: false });
+      const profile = db.creatorProfiles.find((p) => p.id === creatorProfileId);
+      const creatorUser = db.users.find((u) => u.id === profile.userId);
+      addNotification(db, { userId: creatorUser.id, type: 'invitation', title: 'New direct invitation', message: `You've been invited to join ${campaign.title}.`, campaignId: campaign.id });
+      logActivity(db, { userId: user.id, entityType: 'collaboration', entityId: collab.id, action: 'Admin sent direct invitation', campaignId: campaign.id });
+      saveDB(db);
+      closeModal();
+      toast('Invitation sent.');
+      render();
+    }
+
+    function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+
+    /* ---------------- Campaigns ---------------- */
+    function campaignsTab() {
+      return `
+        <button class="btn btn-primary btn-sm" style="margin-bottom:12px;" onclick="openCreateCampaign()">Create Campaign</button>
+        <div class="card table-wrap"><table>
+          <tr><th>Campaign</th><th>City</th><th>Status</th><th>Applications</th><th>Places</th><th>Deadline</th></tr>
+          ${db.campaigns.map((c) => {
+            const apps = db.applications.filter((a) => a.campaignId === c.id).length;
+            const approved = db.collaborations.filter((col) => col.campaignId === c.id && !['cancelled', 'creator_withdrew'].includes(col.status)).length;
+            return `<tr>
+              <td>${escapeHtml(c.title)}</td>
+              <td>${escapeHtml(c.city)}</td>
+              <td>${badge(c.status)}</td>
+              <td>${apps}</td>
+              <td>${approved} / ${c.capacity}</td>
+              <td>${formatDate(c.applicationDeadline)}</td>
+            </tr>`;
+          }).join('')}
+        </table></div>`;
+    }
+
+    function openCreateCampaign() {
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">×</button>
+            <h2>Create campaign</h2>
+            <label>Brand name</label><input id="c-brand" required />
+            <label>Campaign title</label><input id="c-title" required />
+            <label>Short description</label><textarea id="c-short"></textarea>
+            <label>Full description</label><textarea id="c-full"></textarea>
+            <div class="grid grid-2">
+              <div><label>City</label><input id="c-city" required /></div>
+              <div><label>Category</label><input id="c-category" placeholder="Food, Beauty..." /></div>
+            </div>
+            <div class="grid grid-2">
+              <div><label>Collaboration type</label>
+                <select id="c-type"><option value="barter">Barter</option><option value="paid">Paid</option><option value="product_gifting">Product gifting</option><option value="ugc">UGC</option></select>
+              </div>
+              <div><label>Compensation value</label><input id="c-comp" placeholder="e.g. Dinner for 2" /></div>
+            </div>
+            <div class="grid grid-2">
+              <div><label>Application deadline</label><input type="date" id="c-appdeadline" required /></div>
+              <div><label>Capacity (places)</label><input type="number" id="c-capacity" value="5" /></div>
+            </div>
+            <div class="grid grid-2">
+              <div><label>Campaign start</label><input type="date" id="c-start" required /></div>
+              <div><label>Campaign end</label><input type="date" id="c-end" required /></div>
+            </div>
+            <label>Reporting deadline</label><input type="date" id="c-report" required />
+            <div class="grid grid-2">
+              <div><label>Min. followers required</label><input type="number" id="c-minfollowers" value="3000" /></div>
+              <div><label>Required category</label><input id="c-reqcategory" placeholder="Food" /></div>
+            </div>
+            <label>Main deliverable</label><input id="c-deliverable" value="1 Instagram Reel" />
+            <label>Brief — content instructions</label><textarea id="c-brief"></textarea>
+            <label>Visibility</label>
+            <select id="c-visibility"><option value="public">Public opportunity</option><option value="invite_only">Invitation only</option></select>
+            <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitCreateCampaign()">Save Draft &amp; Publish</button>
+          </div>
+        </div>`;
+    }
+
+    function submitCreateCampaign() {
+      reload();
+      const title = document.getElementById('c-title').value.trim();
+      const brandName = document.getElementById('c-brand').value.trim();
+      if (!title || !brandName) { toast('Brand and campaign title are required.'); return; }
+      let brand = db.brands.find((b) => b.name.toLowerCase() === brandName.toLowerCase());
+      if (!brand) { brand = { id: uid('brand'), name: brandName, logo: '', website: '', active: true }; db.brands.push(brand); }
+      const campaign = {
+        id: uid('campaign'),
+        brandId: brand.id,
+        title,
+        managerName: `${user.firstName} ${user.lastName}`,
+        category: document.getElementById('c-category').value.trim() || 'Other',
+        city: document.getElementById('c-city').value.trim(),
+        address: '',
+        status: 'open_for_applications',
+        collaborationType: document.getElementById('c-type').value,
+        compensation: { type: document.getElementById('c-type').value, barterValue: document.getElementById('c-comp').value.trim(), creatorFee: 0, plusOneBudget: '' },
+        shortDescription: document.getElementById('c-short').value.trim(),
+        fullDescription: document.getElementById('c-full').value.trim(),
+        criteria: {
+          minFollowers: Number(document.getElementById('c-minfollowers').value || 0),
+          requiredCity: document.getElementById('c-city').value.trim(),
+          requiredCategory: document.getElementById('c-reqcategory').value.trim(),
+          requiredPlatform: 'Instagram',
+        },
+        deliverables: [{ id: uid('del'), type: document.getElementById('c-deliverable').value.trim() || 'Instagram Reel', quantity: 1, requiresApproval: true }],
+        brief: {
+          intro: document.getElementById('c-short').value.trim(),
+          brandInfo: brandName,
+          keyMessages: [],
+          contentInstructions: document.getElementById('c-brief').value.trim(),
+          mandatoryTags: [],
+          mandatoryHashtags: [],
+          whatToAvoid: '',
+          disclosureRequirements: 'Use #ad or #gifted per local advertising guidelines.',
+          usageRights: '',
+          updatedAt: nowISO(),
+        },
+        applicationDeadline: new Date(document.getElementById('c-appdeadline').value).toISOString(),
+        campaignStart: new Date(document.getElementById('c-start').value).toISOString(),
+        campaignEnd: new Date(document.getElementById('c-end').value).toISOString(),
+        reportingDeadline: new Date(document.getElementById('c-report').value).toISOString(),
+        capacity: Number(document.getElementById('c-capacity').value || 5),
+        visibility: document.getElementById('c-visibility').value,
+        createdAt: nowISO(),
+      };
+      db.campaigns.push(campaign);
+      logActivity(db, { userId: user.id, entityType: 'campaign', entityId: campaign.id, action: 'Campaign created', campaignId: campaign.id });
+      saveDB(db);
+      closeModal();
+      toast('Campaign published.');
+      switchTab('campaigns');
+    }
+
+    /* ---------------- Review Queue ---------------- */
+    function reviewTab() {
+      const queue = reviewQueue();
+      if (queue.length === 0) return '<div class="card empty-state"><p>Nothing waiting for review.</p></div>';
+      return `<div class="card">${queue.map((t) => reviewRow(t)).join('')}</div>`;
+    }
+
+    function reviewRow(t) {
+      const campaign = campaignOf(t.collaborationId);
+      const collab = db.collaborations.find((c) => c.id === t.collaborationId);
+      const cName = creatorName(collab.creatorId);
+      let detail = '';
+      if (t.type === 'visit_date') detail = `Requested date: ${formatDate(collab.visitDate)}`;
+      if (t.type === 'draft') {
+        const sub = [...db.contentSubmissions].filter((s) => s.taskId === t.id).sort((a, b) => b.version - a.version)[0];
+        detail = sub ? `File: ${escapeHtml(sub.fileName)} (v${sub.version})${sub.note ? ' — "' + escapeHtml(sub.note) + '"' : ''}` : '';
+      }
+      if (t.type === 'stats') {
+        const stat = [...db.statistics].filter((s) => s.collaborationId === t.collaborationId).sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt))[0];
+        detail = stat ? `Views: ${stat.views} · Reach: ${stat.reach} · Likes: ${stat.likes} · Screenshot: ${escapeHtml(stat.screenshotName)}` : '';
+      }
+      return `
+        <div class="task-item">
+          <div style="flex:1;">
+            <div class="card-row">
+              <strong>${escapeHtml(t.title)}</strong>
+              <span class="muted small">${escapeHtml(cName)} · ${escapeHtml(campaign.title)}</span>
+            </div>
+            <div class="small muted">${detail}</div>
+            <div style="margin-top:8px;display:flex;gap:8px;">
+              <button class="btn btn-success btn-sm" onclick="reviewApprove('${t.id}')">Approve</button>
+              <button class="btn btn-danger btn-sm" onclick="reviewRequestChanges('${t.id}')">Request Changes</button>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function reviewApprove(taskId) {
+      reload();
+      const t = db.tasks.find((x) => x.id === taskId);
+      const collab = db.collaborations.find((c) => c.id === t.collaborationId);
+      const campaign = campaignOf(t.collaborationId);
+      t.status = 'approved';
+      t.completedDate = nowISO();
+      t.adminComment = '';
+      if (t.type === 'visit_date') collab.visitStatus = 'date_approved';
+      if (t.type === 'draft') {
+        const sub = [...db.contentSubmissions].filter((s) => s.taskId === t.id).sort((a, b) => b.version - a.version)[0];
+        if (sub) sub.status = 'approved';
+      }
+      if (t.type === 'stats') {
+        const stat = [...db.statistics].filter((s) => s.collaborationId === t.collaborationId).sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt))[0];
+        if (stat) stat.status = 'approved';
+      }
+      const profile = db.creatorProfiles.find((p) => p.id === collab.creatorId);
+      const creatorUser = db.users.find((u) => u.id === profile.userId);
+      addNotification(db, { userId: creatorUser.id, type: 'campaign', title: `${t.title} approved`, message: `Your "${t.title}" for ${campaign.title} was approved.`, campaignId: campaign.id });
+      logActivity(db, { userId: user.id, entityType: 'task', entityId: t.id, action: `Admin approved: ${t.title}`, campaignId: campaign.id });
+      maybeCompleteCollaboration(db, collab.id);
+      saveDB(db);
+      toast('Approved.');
+      render();
+    }
+
+    function reviewRequestChanges(taskId) {
+      const comment = prompt('What changes are needed?');
+      if (comment === null) return;
+      reload();
+      const t = db.tasks.find((x) => x.id === taskId);
+      const collab = db.collaborations.find((c) => c.id === t.collaborationId);
+      const campaign = campaignOf(t.collaborationId);
+      t.status = 'changes_requested';
+      t.adminComment = comment;
+      const profile = db.creatorProfiles.find((p) => p.id === collab.creatorId);
+      const creatorUser = db.users.find((u) => u.id === profile.userId);
+      addNotification(db, { userId: creatorUser.id, type: 'campaign', title: 'Changes requested', message: `Changes requested on "${t.title}" for ${campaign.title}: ${comment}`, campaignId: campaign.id });
+      logActivity(db, { userId: user.id, entityType: 'task', entityId: t.id, action: `Admin requested changes: ${t.title}`, campaignId: campaign.id, meta: comment });
+      saveDB(db);
+      toast('Changes requested.');
+      render();
+    }
+
+    /* ---------------- Reports ---------------- */
+    function reportsTab() {
+      return `
+        <div class="card">
+          <label>Select campaign</label>
+          <select id="report-campaign">${db.campaigns.map((c) => `<option value="${c.id}">${escapeHtml(c.title)}</option>`).join('')}</select>
+          <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="renderReport()">Generate Report</button>
+        </div>
+        <div id="report-output"></div>
+      `;
+    }
+
+    function renderReport() {
+      const campaignId = document.getElementById('report-campaign').value;
+      const campaign = db.campaigns.find((c) => c.id === campaignId);
+      const collabs = db.collaborations.filter((c) => c.campaignId === campaignId);
+      const stats = db.statistics.filter((s) => collabs.some((c) => c.id === s.collaborationId));
+      const published = db.publishedContent.filter((p) => collabs.some((c) => c.id === p.collaborationId));
+      const totals = stats.reduce((acc, s) => {
+        acc.views += s.views || 0; acc.reach += s.reach || 0; acc.likes += s.likes || 0; acc.comments += s.comments || 0;
+        return acc;
+      }, { views: 0, reach: 0, likes: 0, comments: 0 });
+      const completed = collabs.filter((c) => c.status === 'completed').length;
+      const cancelled = collabs.filter((c) => ['cancelled', 'creator_withdrew'].includes(c.status)).length;
+      const missingStats = collabs.filter((c) => c.status !== 'cancelled' && !stats.some((s) => s.collaborationId === c.id)).length;
+
+      const rows = [
+        ['Campaign', campaign.title],
+        ['Creators invited/approved', collabs.length],
+        ['Creators completed', completed],
+        ['Creators cancelled', cancelled],
+        ['Published outputs', published.length],
+        ['Total views', totals.views],
+        ['Total reach', totals.reach],
+        ['Total likes', totals.likes],
+        ['Total comments', totals.comments],
+        ['Missing statistics', missingStats],
+      ];
+
+      document.getElementById('report-output').innerHTML = `
+        <div class="card">
+          <h3>${escapeHtml(campaign.title)} — report</h3>
+          <table>${rows.map(([k, v]) => `<tr><td class="muted">${k}</td><td>${v}</td></tr>`).join('')}</table>
+          <button class="btn btn-secondary btn-sm" style="margin-top:12px;" onclick='downloadCSV(${JSON.stringify(rows)}, ${JSON.stringify(campaign.title)})'>Download CSV</button>
+        </div>`;
+    }
+
+    function downloadCSV(rows, campaignTitle) {
+      const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${campaignTitle.replace(/\s+/g, '_')}_report.csv`;
+      a.click();
+    }
+
+    /* ---------------- Activity Log ---------------- */
+    function activityTab() {
+      const logs = [...db.activityLog].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 100);
+      if (logs.length === 0) return '<div class="card empty-state"><p>No activity recorded yet.</p></div>';
+      return `<div class="card table-wrap"><table>
+        <tr><th>When</th><th>Action</th><th>Campaign</th></tr>
+        ${logs.map((l) => {
+          const campaign = l.campaignId ? db.campaigns.find((c) => c.id === l.campaignId) : null;
+          return `<tr><td class="small">${formatDate(l.timestamp)}</td><td class="small">${escapeHtml(l.action)}</td><td class="small">${campaign ? escapeHtml(campaign.title) : '—'}</td></tr>`;
+        }).join('')}
+      </table></div>`;
+    }
+  </script>
+</body>
+</html>

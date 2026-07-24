@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Log In — InfluenceCrafter Creator Hub</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="auth-logo">InfluenceCrafter <span>CREATOR HUB</span></div>
+      <div class="card">
+        <h1>Welcome back</h1>
+        <p>Log in to see your collaborations, deadlines and opportunities.</p>
+        <div id="msg"></div>
+        <form id="login-form">
+          <label for="email">Email address</label>
+          <input type="email" id="email" required autocomplete="email" />
+          <label for="password">Password</label>
+          <input type="password" id="password" required autocomplete="current-password" />
+          <button type="submit" class="btn btn-primary btn-block" style="margin-top:18px;">Log In</button>
+        </form>
+        <p class="small" style="margin-top:16px;text-align:center;">
+          New creator? <a href="register.html">Create an account</a>
+        </p>
+      </div>
+      <div class="card small">
+        <strong>Demo accounts</strong>
+        <p class="muted small" style="margin-top:6px;">
+          Admin: admin@influencecrafter.cz / admin123<br />
+          Creator: anna@example.com / creator123
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/db.js"></script>
+  <script src="js/auth.js"></script>
+  <script>
+    // If already logged in, go straight to the right dashboard.
+    (function () {
+      const db = loadDB();
+      const user = currentUser(db);
+      if (user) window.location.href = user.role === 'admin' ? 'admin-dashboard.html' : 'creator-dashboard.html';
+    })();
+
+    document.getElementById('login-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      const result = login(email, password);
+      const msg = document.getElementById('msg');
+      if (!result.ok) {
+        msg.innerHTML = `<div class="error-msg">${result.error}</div>`;
+        return;
+      }
+      if (result.user.role === 'creator' && result.user.status === 'pending_approval') {
+        msg.innerHTML = `<div class="error-msg">Your account is still awaiting approval from the InfluenceCrafter team. We'll email you once it's ready.</div>`;
+        clearSession();
+        return;
+      }
+      window.location.href = result.user.role === 'admin' ? 'admin-dashboard.html' : 'creator-dashboard.html';
+    });
+  </script>
+</body>
+</html>
