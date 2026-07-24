@@ -6,16 +6,19 @@
 <title>InfluenceCrafter Creator Hub</title>
 </head>
 <body>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.8/dist/umd/supabase.js"></script>
+  <script src="js/supabase-client.js"></script>
   <script src="js/db.js"></script>
   <script src="js/auth.js"></script>
   <script>
-    const db = loadDB();
-    const user = currentUser(db);
-    if (user) {
-      window.location.href = user.role === 'admin' ? 'admin-dashboard.html' : 'creator-dashboard.html';
-    } else {
-      window.location.href = 'login.html';
-    }
+    (async function () {
+      const user = await currentUser();
+      if (user) {
+        window.location.href = user.role === 'admin' ? 'admin-dashboard.html' : 'creator-dashboard.html';
+      } else {
+        window.location.href = 'login.html';
+      }
+    })();
   </script>
 </body>
 </html>

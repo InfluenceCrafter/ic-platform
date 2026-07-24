@@ -11,16 +11,21 @@
   <div class="page" id="app"></div>
   <div id="modal-root"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.8/dist/umd/supabase.js"></script>
+  <script src="js/supabase-client.js"></script>
   <script src="js/db.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/ui.js"></script>
   <script>
-    const ctx = requireRole(['admin']);
     let db, user;
     let activeTab = 'overview';
-    if (ctx) { db = ctx.db; user = ctx.user; renderNav('admin-dashboard.html'); render(); }
 
-    function reload() { db = loadDB(); }
+    (async function () {
+      const ctx = await requireRole(['admin']);
+      if (ctx) { db = ctx.db; user = ctx.user; renderNav('admin-dashboard.html', db, user); render(); }
+    })();
+
+    async function reload() { db = await loadDB(); }
 
     function render() {
       document.getElementById('app').innerHTML = `
@@ -159,36 +164,36 @@
       </table></div>`;
     }
 
-    function approveApplication(appId) {
-      reload();
+    async function approveApplication(appId) {
+      await reload();
       const app = db.applications.find((a) => a.id === appId);
       const campaign = db.campaigns.find((c) => c.id === app.campaignId);
-      const collab = createCollaboration(db, { campaignId: app.campaignId, creatorId: app.creatorId, autoAccept: true });
+      const collab = await createCollaboration(db, { campaignId: app.campaignId, creatorId: app.creatorId, autoAccept: true });
       app.status = 'approved';
       app.reviewedAt = nowISO();
       app.reviewer = user.id;
       app.collaborationId = collab.id;
+      await dbUpdate('applications', app.id, { status: app.status, reviewedAt: app.reviewedAt, reviewer: app.reviewer, collaborationId: app.collaborationId });
       const profile = db.creatorProfiles.find((p) => p.id === app.creatorId);
       const creatorUser = db.users.find((u) => u.id === profile.userId);
-      addNotification(db, { userId: creatorUser.id, type: 'application', title: 'Application approved', message: `You have been selected for ${campaign.title}.`, campaignId: campaign.id });
-      logActivity(db, { userId: user.id, entityType: 'application', entityId: app.id, action: 'Application approved', campaignId: campaign.id });
-      saveDB(db);
+      await addNotification(db, { userId: creatorUser.id, type: 'application', title: 'Application approved', message: `You have been selected for ${campaign.title}.`, campaignId: campaign.id });
+      await logActivity(db, { userId: user.id, entityType: 'application', entityId: app.id, action: 'Application approved', campaignId: campaign.id });
       toast('Application approved — collaboration created.');
       render();
     }
 
-    function rejectApplication(appId) {
-      reload();
+    async function rejectApplication(appId) {
+      await reload();
       const app = db.applications.find((a) => a.id === appId);
       const campaign = db.campaigns.find((c) => c.id === app.campaignId);
       app.status = 'rejected';
       app.reviewedAt = nowISO();
       app.reviewer = user.id;
+      await dbUpdate('applications', app.id, { status: app.status, reviewedAt: app.reviewedAt, reviewer: app.reviewer });
       const profile = db.creatorProfiles.find((p) => p.id === app.creatorId);
       const creatorUser = db.users.find((u) => u.id === profile.userId);
-      addNotification(db, { userId: creatorUser.id, type: 'application', title: 'Application update', message: `Thank you for your interest in ${campaign.title}. We are unable to include you this time, but we'd love to consider you for future opportunities.`, campaignId: campaign.id });
-      logActivity(db, { userId: user.id, entityType: 'application', entityId: app.id, action: 'Application rejected', campaignId: campaign.id });
-      saveDB(db);
+      await addNotification(db, { userId: creatorUser.id, type: 'application', title: 'Application update', message: `Thank you for your interest in ${campaign.title}. We are unable to include you this time, but we'd love to consider you for future opportunities.`, campaignId: campaign.id });
+      await logActivity(db, { userId: user.id, entityType: 'application', entityId: app.id, action: 'Application rejected', campaignId: campaign.id });
       toast('Application rejected.');
       render();
     }
@@ -222,43 +227,43 @@
       </table></div>`;
     }
 
-    function approveCreator(userId) {
-      reload();
+    async function approveCreator(userId) {
+      await reload();
       const u = db.users.find((x) => x.id === userId);
       u.status = 'approved';
-      addNotification(db, { userId: u.id, type: 'account', title: 'Account approved', message: 'Your InfluenceCrafter Creator Hub account has been approved. You can now browse and apply for collaborations.' });
-      logActivity(db, { userId: user.id, entityType: 'user', entityId: u.id, action: 'Admin approved creator' });
-      saveDB(db);
+      await dbUpdate('users', u.id, { status: u.status });
+      await addNotification(db, { userId: u.id, type: 'account', title: 'Account approved', message: 'Your InfluenceCrafter Creator Hub account has been approved. You can now browse and apply for collaborations.' });
+      await logActivity(db, { userId: user.id, entityType: 'user', entityId: u.id, action: 'Admin approved creator' });
       toast('Creator approved.');
       render();
     }
 
-    function rejectCreator(userId) {
-      reload();
+    async function rejectCreator(userId) {
+      await reload();
       const u = db.users.find((x) => x.id === userId);
       u.status = 'rejected';
-      logActivity(db, { userId: user.id, entityType: 'user', entityId: u.id, action: 'Admin rejected creator' });
-      saveDB(db);
+      await dbUpdate('users', u.id, { status: u.status });
+      await logActivity(db, { userId: user.id, entityType: 'user', entityId: u.id, action: 'Admin rejected creator' });
       toast('Creator rejected.');
       render();
     }
 
-    function suspendCreator(userId) {
-      reload();
+    async function suspendCreator(userId) {
+      await reload();
       const u = db.users.find((x) => x.id === userId);
       u.status = 'suspended';
-      logActivity(db, { userId: user.id, entityType: 'user', entityId: u.id, action: 'Admin suspended creator' });
-      saveDB(db);
+      await dbUpdate('users', u.id, { status: u.status });
+      await logActivity(db, { userId: user.id, entityType: 'user', entityId: u.id, action: 'Admin suspended creator' });
       toast('Creator suspended.');
       render();
     }
 
-    function reactivateCreator(userId) {
-      reload();
+    async function reactivateCreator(userId) {
+      await reload();
       const u = db.users.find((x) => x.id === userId);
       u.status = 'approved';
-      logActivity(db, { userId: user.id, entityType: 'user', entityId: u.id, action: 'Admin reactivated creator' });
-      saveDB(db);
+      await dbUpdate('users', u.id, { status: u.status });
+      await logActivity(db, { userId: user.id, entityType: 'user', entityId: u.id, action: 'Admin reactivated creator' });
       toast('Creator reactivated.');
       render();
     }
@@ -287,8 +292,8 @@
         </div>`;
     }
 
-    function submitAddCreator() {
-      reload();
+    async function submitAddCreator() {
+      await reload();
       const fields = {
         firstName: document.getElementById('ac-first').value.trim(),
         lastName: document.getElementById('ac-last').value.trim(),
@@ -296,13 +301,11 @@
         instagramUsername: document.getElementById('ac-instagram').value.trim(),
         city: document.getElementById('ac-city').value.trim(),
         country: document.getElementById('ac-country').value.trim(),
-        password: generatePassword(),
       };
       if (!fields.firstName || !fields.lastName || !fields.email) { toast('First name, last name and email are required.'); return; }
-      const result = adminCreateCreator(db, fields);
+      const result = await adminCreateCreator(fields);
       if (!result.ok) { toast(result.error); return; }
-      logActivity(db, { userId: user.id, entityType: 'user', entityId: result.userId, action: 'Admin created creator account' });
-      saveDB(db);
+      await logActivity(db, { userId: user.id, entityType: 'user', entityId: result.userId, action: 'Admin created creator account' });
       document.getElementById('modal-root').innerHTML = `
         <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
           <div class="modal">
@@ -311,7 +314,7 @@
             <p class="small">Share these login details with ${escapeHtml(fields.firstName)}:</p>
             <div class="card small" style="margin-top:10px;">
               <div><strong>Email:</strong> ${escapeHtml(fields.email)}</div>
-              <div><strong>Password:</strong> ${escapeHtml(fields.password)}</div>
+              <div><strong>Password:</strong> ${escapeHtml(result.password)}</div>
             </div>
             <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="closeModal()">Done</button>
           </div>
@@ -333,18 +336,17 @@
         </div>`;
     }
 
-    function sendInvite(creatorProfileId) {
-      reload();
+    async function sendInvite(creatorProfileId) {
+      await reload();
       const campaignId = document.getElementById('invite-campaign').value;
       const campaign = db.campaigns.find((c) => c.id === campaignId);
       const existing = db.collaborations.find((c) => c.campaignId === campaignId && c.creatorId === creatorProfileId);
       if (existing) { toast('This creator already has a collaboration on this campaign.'); closeModal(); return; }
-      const collab = createCollaboration(db, { campaignId, creatorId: creatorProfileId, autoAccept: false });
+      const collab = await createCollaboration(db, { campaignId, creatorId: creatorProfileId, autoAccept: false });
       const profile = db.creatorProfiles.find((p) => p.id === creatorProfileId);
       const creatorUser = db.users.find((u) => u.id === profile.userId);
-      addNotification(db, { userId: creatorUser.id, type: 'invitation', title: 'New direct invitation', message: `You've been invited to join ${campaign.title}.`, campaignId: campaign.id });
-      logActivity(db, { userId: user.id, entityType: 'collaboration', entityId: collab.id, action: 'Admin sent direct invitation', campaignId: campaign.id });
-      saveDB(db);
+      await addNotification(db, { userId: creatorUser.id, type: 'invitation', title: 'New direct invitation', message: `You've been invited to join ${campaign.title}.`, campaignId: campaign.id });
+      await logActivity(db, { userId: user.id, entityType: 'collaboration', entityId: collab.id, action: 'Admin sent direct invitation', campaignId: campaign.id });
       closeModal();
       toast('Invitation sent.');
       render();
@@ -415,15 +417,17 @@
         </div>`;
     }
 
-    function submitCreateCampaign() {
-      reload();
+    async function submitCreateCampaign() {
+      await reload();
       const title = document.getElementById('c-title').value.trim();
       const brandName = document.getElementById('c-brand').value.trim();
       if (!title || !brandName) { toast('Brand and campaign title are required.'); return; }
       let brand = db.brands.find((b) => b.name.toLowerCase() === brandName.toLowerCase());
-      if (!brand) { brand = { id: uid('brand'), name: brandName, logo: '', website: '', active: true }; db.brands.push(brand); }
-      const campaign = {
-        id: uid('campaign'),
+      if (!brand) {
+        brand = await dbInsert('brands', { name: brandName, logo: '', website: '', active: true });
+        db.brands.push(brand);
+      }
+      const campaign = await dbInsert('campaigns', {
         brandId: brand.id,
         title,
         managerName: `${user.firstName} ${user.lastName}`,
@@ -461,10 +465,9 @@
         capacity: Number(document.getElementById('c-capacity').value || 5),
         visibility: document.getElementById('c-visibility').value,
         createdAt: nowISO(),
-      };
+      });
       db.campaigns.push(campaign);
-      logActivity(db, { userId: user.id, entityType: 'campaign', entityId: campaign.id, action: 'Campaign created', campaignId: campaign.id });
-      saveDB(db);
+      await logActivity(db, { userId: user.id, entityType: 'campaign', entityId: campaign.id, action: 'Campaign created', campaignId: campaign.id });
       closeModal();
       toast('Campaign published.');
       switchTab('campaigns');
@@ -507,47 +510,50 @@
         </div>`;
     }
 
-    function reviewApprove(taskId) {
-      reload();
+    async function reviewApprove(taskId) {
+      await reload();
       const t = db.tasks.find((x) => x.id === taskId);
       const collab = db.collaborations.find((c) => c.id === t.collaborationId);
       const campaign = campaignOf(t.collaborationId);
       t.status = 'approved';
       t.completedDate = nowISO();
       t.adminComment = '';
-      if (t.type === 'visit_date') collab.visitStatus = 'date_approved';
+      await dbUpdate('tasks', t.id, { status: t.status, completedDate: t.completedDate, adminComment: t.adminComment });
+      if (t.type === 'visit_date') {
+        collab.visitStatus = 'date_approved';
+        await dbUpdate('collaborations', collab.id, { visitStatus: collab.visitStatus });
+      }
       if (t.type === 'draft') {
         const sub = [...db.contentSubmissions].filter((s) => s.taskId === t.id).sort((a, b) => b.version - a.version)[0];
-        if (sub) sub.status = 'approved';
+        if (sub) { sub.status = 'approved'; await dbUpdate('contentSubmissions', sub.id, { status: sub.status }); }
       }
       if (t.type === 'stats') {
         const stat = [...db.statistics].filter((s) => s.collaborationId === t.collaborationId).sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt))[0];
-        if (stat) stat.status = 'approved';
+        if (stat) { stat.status = 'approved'; await dbUpdate('statistics', stat.id, { status: stat.status }); }
       }
       const profile = db.creatorProfiles.find((p) => p.id === collab.creatorId);
       const creatorUser = db.users.find((u) => u.id === profile.userId);
-      addNotification(db, { userId: creatorUser.id, type: 'campaign', title: `${t.title} approved`, message: `Your "${t.title}" for ${campaign.title} was approved.`, campaignId: campaign.id });
-      logActivity(db, { userId: user.id, entityType: 'task', entityId: t.id, action: `Admin approved: ${t.title}`, campaignId: campaign.id });
-      maybeCompleteCollaboration(db, collab.id);
-      saveDB(db);
+      await addNotification(db, { userId: creatorUser.id, type: 'campaign', title: `${t.title} approved`, message: `Your "${t.title}" for ${campaign.title} was approved.`, campaignId: campaign.id });
+      await logActivity(db, { userId: user.id, entityType: 'task', entityId: t.id, action: `Admin approved: ${t.title}`, campaignId: campaign.id });
+      await maybeCompleteCollaboration(db, collab.id);
       toast('Approved.');
       render();
     }
 
-    function reviewRequestChanges(taskId) {
+    async function reviewRequestChanges(taskId) {
       const comment = prompt('What changes are needed?');
       if (comment === null) return;
-      reload();
+      await reload();
       const t = db.tasks.find((x) => x.id === taskId);
       const collab = db.collaborations.find((c) => c.id === t.collaborationId);
       const campaign = campaignOf(t.collaborationId);
       t.status = 'changes_requested';
       t.adminComment = comment;
+      await dbUpdate('tasks', t.id, { status: t.status, adminComment: t.adminComment });
       const profile = db.creatorProfiles.find((p) => p.id === collab.creatorId);
       const creatorUser = db.users.find((u) => u.id === profile.userId);
-      addNotification(db, { userId: creatorUser.id, type: 'campaign', title: 'Changes requested', message: `Changes requested on "${t.title}" for ${campaign.title}: ${comment}`, campaignId: campaign.id });
-      logActivity(db, { userId: user.id, entityType: 'task', entityId: t.id, action: `Admin requested changes: ${t.title}`, campaignId: campaign.id, meta: comment });
-      saveDB(db);
+      await addNotification(db, { userId: creatorUser.id, type: 'campaign', title: 'Changes requested', message: `Changes requested on "${t.title}" for ${campaign.title}: ${comment}`, campaignId: campaign.id });
+      await logActivity(db, { userId: user.id, entityType: 'task', entityId: t.id, action: `Admin requested changes: ${t.title}`, campaignId: campaign.id, meta: comment });
       toast('Changes requested.');
       render();
     }

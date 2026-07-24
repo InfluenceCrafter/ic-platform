@@ -10,15 +10,19 @@
   <nav id="nav"></nav>
   <div class="page" id="app"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.8/dist/umd/supabase.js"></script>
+  <script src="js/supabase-client.js"></script>
   <script src="js/db.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/ui.js"></script>
   <script>
-    const ctx = requireRole(['creator']);
-    if (ctx) render(ctx.db, ctx.user);
+    (async function () {
+      const ctx = await requireRole(['creator']);
+      if (ctx) render(ctx.db, ctx.user);
+    })();
 
     function render(db, user) {
-      renderNav('creator-dashboard.html');
+      renderNav('creator-dashboard.html', db, user);
       const profile = currentCreatorProfile(db, user);
       const collabs = db.collaborations.filter((c) => c.creatorId === profile.id && !['completed', 'cancelled', 'withdrawn'].includes(c.status));
       const openCampaigns = db.campaigns.filter((c) => c.status === 'open_for_applications' || c.status === 'closing_soon');

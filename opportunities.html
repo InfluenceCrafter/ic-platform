@@ -34,21 +34,25 @@
 
   <div id="modal-root"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.8/dist/umd/supabase.js"></script>
+  <script src="js/supabase-client.js"></script>
   <script src="js/db.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/ui.js"></script>
   <script>
-    const ctx = requireRole(['creator']);
     let db, user, profile;
-    if (ctx) {
-      db = ctx.db; user = ctx.user; profile = currentCreatorProfile(db, user);
-      renderNav('opportunities.html');
-      initFilters();
-      renderList();
-      const params = new URLSearchParams(window.location.search);
-      const preselect = params.get('campaign');
-      if (preselect) openDetail(preselect);
-    }
+    (async function () {
+      const ctx = await requireRole(['creator']);
+      if (ctx) {
+        db = ctx.db; user = ctx.user; profile = currentCreatorProfile(db, user);
+        renderNav('opportunities.html', db, user);
+        initFilters();
+        renderList();
+        const params = new URLSearchParams(window.location.search);
+        const preselect = params.get('campaign');
+        if (preselect) openDetail(preselect);
+      }
+    })();
 
     function initFilters() {
       const cities = [...new Set(db.campaigns.map((c) => c.city))];
@@ -70,8 +74,8 @@
       });
     }
 
-    function renderList() {
-      db = loadDB();
+    async function renderList() {
+      db = await loadDB();
       const city = document.getElementById('f-city').value;
       const category = document.getElementById('f-category').value;
       const type = document.getElementById('f-type').value;
@@ -203,10 +207,9 @@
       `;
     }
 
-    function submitApplication(e, campaignId) {
+    async function submitApplication(e, campaignId) {
       e.preventDefault();
-      const app = {
-        id: uid('app'),
+      const app = await dbInsert('applications', {
         campaignId,
         creatorId: profile.id,
         why: document.getElementById('ap-why').value,
@@ -220,14 +223,13 @@
         reviewedAt: null,
         reviewer: null,
         collaborationId: null,
-      };
-      db.applications.push(app);
-      logActivity(db, { userId: user.id, entityType: 'application', entityId: app.id, action: 'Creator applied to campaign', campaignId });
-      db.users.filter((u) => u.role === 'admin').forEach((admin) => {
-        const campaign = db.campaigns.find((c) => c.id === campaignId);
-        addNotification(db, { userId: admin.id, type: 'application', title: 'New campaign application', message: `${user.firstName} ${user.lastName} applied to ${campaign.title}.`, campaignId });
       });
-      saveDB(db);
+      db.applications.push(app);
+      await logActivity(db, { userId: user.id, entityType: 'application', entityId: app.id, action: 'Creator applied to campaign', campaignId });
+      const campaign = db.campaigns.find((c) => c.id === campaignId);
+      for (const admin of db.users.filter((u) => u.role === 'admin')) {
+        await addNotification(db, { userId: admin.id, type: 'application', title: 'New campaign application', message: `${user.firstName} ${user.lastName} applied to ${campaign.title}.`, campaignId });
+      }
       toast('Application submitted.');
       closeModal();
       renderList();

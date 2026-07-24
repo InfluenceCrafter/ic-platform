@@ -1,22 +1,12 @@
-/* Session + auth helpers (mock — Phase 1 prototype). */
+/* Session + auth helpers — Supabase Auth-backed (Phase 2).
+   supabase-js persists its own session in localStorage; we never touch it directly. */
 
-function getSession() {
-  const raw = localStorage.getItem(SESSION_KEY);
-  return raw ? JSON.parse(raw) : null;
-}
-
-function setSession(userId) {
-  localStorage.setItem(SESSION_KEY, JSON.stringify({ userId }));
-}
-
-function clearSession() {
-  localStorage.removeItem(SESSION_KEY);
-}
-
-function currentUser(db) {
-  const session = getSession();
-  if (!session) return null;
-  return db.users.find((u) => u.id === session.userId) || null;
+/* Lightweight "who's logged in" check — used by entry pages before a full loadDB(). */
+async function currentUser() {
+  const { data: { user: authUser } } = await supabase.auth.getUser();
+  if (!authUser) return null;
+  const { data: row } = await supabase.from('profiles').select('*').eq('id', authUser.id).single();
+  return row ? toJs('users', row) : null;
 }
 
 function currentCreatorProfile(db, user) {
@@ -25,10 +15,16 @@ function currentCreatorProfile(db, user) {
 }
 
 /* Call at the top of every protected page. Redirects if not authorized. */
-function requireRole(allowedRoles) {
-  const db = loadDB();
-  const user = currentUser(db);
+async function requireRole(allowedRoles) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) {
+    window.location.href = 'login.html';
+    return null;
+  }
+  const db = await loadDB();
+  const user = db.users.find((u) => u.id === session.user.id) || null;
   if (!user) {
+    await supabase.auth.signOut();
     window.location.href = 'login.html';
     return null;
   }
@@ -37,129 +33,71 @@ function requireRole(allowedRoles) {
     return null;
   }
   if (user.status === 'suspended' || user.status === 'archived') {
-    clearSession();
+    await supabase.auth.signOut();
     window.location.href = 'login.html';
     return null;
   }
   return { db, user };
 }
 
-function login(email, password) {
-  const db = loadDB();
-  const user = db.users.find((u) => u.email.toLowerCase() === email.toLowerCase() && u.password === password);
-  if (!user) return { ok: false, error: 'Invalid email or password.' };
-  if (user.status === 'suspended') return { ok: false, error: 'This account has been suspended.' };
-  if (user.status === 'archived') return { ok: false, error: 'This account is no longer active.' };
-  setSession(user.id);
-  user.lastLoginAt = nowISO();
-  saveDB(db);
+function mapAuthError(error) {
+  const msg = error.message || '';
+  if (msg.toLowerCase().includes('invalid login credentials')) return 'Invalid email or password.';
+  return msg;
+}
+
+async function login(email, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) return { ok: false, error: mapAuthError(error) };
+  const { data: row } = await supabase.from('profiles').select('*').eq('id', data.user.id).single();
+  const user = toJs('users', row);
+  if (user.status === 'suspended') {
+    await supabase.auth.signOut();
+    return { ok: false, error: 'This account has been suspended.' };
+  }
+  if (user.status === 'archived') {
+    await supabase.auth.signOut();
+    return { ok: false, error: 'This account is no longer active.' };
+  }
+  await supabase.from('profiles').update({ last_login_at: nowISO() }).eq('id', user.id);
   return { ok: true, user };
 }
 
-function defaultCreatorProfile(profileId, userId, fields) {
+function creatorProfileFields(fields) {
   return {
-    id: profileId,
-    userId,
     instagramUsername: fields.instagramUsername || '',
-    tiktokUsername: '',
-    youtubeUsername: '',
     city: fields.city || '',
     country: fields.country || '',
     languages: fields.language ? [fields.language] : [],
-    phone: '',
-    social: {
-      instagram: { followers: 0, avgReach: 0, avgStoryViews: 0, avgReelViews: 0, engagementRate: 0 },
-      tiktok: { followers: 0, avgReach: 0, avgStoryViews: 0, avgReelViews: 0, engagementRate: 0 },
-    },
-    categories: [],
-    preferences: {
-      barter: true,
-      paid: true,
-      events: false,
-      restaurantVisits: false,
-      productGifting: false,
-      storiesOnly: false,
-      reels: false,
-      tiktokCollabs: false,
-      availableForPlusOne: false,
-      availableForTravel: false,
-      minNoticeDays: 7,
-    },
-    dietary: [],
-    internal: {
-      reliabilityRating: null,
-      contentQualityRating: null,
-      communicationRating: null,
-      internalTags: [],
-      blacklisted: false,
-      vip: false,
-      internalNotes: '',
-      totalCompleted: 0,
-      totalCancelled: 0,
-      totalMissedDeadlines: 0,
-    },
-    profilePhoto: '',
   };
 }
 
-function registerCreator(fields) {
-  const db = loadDB();
-  if (db.users.some((u) => u.email.toLowerCase() === fields.email.toLowerCase())) {
-    return { ok: false, error: 'An account with this email already exists.' };
-  }
-  const userId = uid('user');
-  const profileId = uid('creator');
-  db.users.push({
-    id: userId,
-    role: 'creator',
+async function registerCreator(fields) {
+  const { data, error } = await supabase.auth.signUp({
     email: fields.email,
     password: fields.password,
-    firstName: fields.firstName,
-    lastName: fields.lastName,
-    status: 'pending_approval',
-    createdAt: nowISO(),
+    options: {
+      data: { role: 'creator', first_name: fields.firstName, last_name: fields.lastName, status: 'pending_approval' },
+    },
   });
-  db.creatorProfiles.push(defaultCreatorProfile(profileId, userId, fields));
-  logActivity(db, { userId, entityType: 'user', entityId: userId, action: 'Creator registered' });
-  db.users.filter((u) => u.role === 'admin').forEach((admin) => {
-    addNotification(db, {
-      userId: admin.id,
-      type: 'account',
-      title: 'New creator registration',
-      message: `${fields.firstName} ${fields.lastName} registered and is awaiting approval.`,
-    });
-  });
-  saveDB(db);
+  if (error) {
+    const msg = error.message.toLowerCase();
+    if (msg.includes('already registered') || msg.includes('already exists')) {
+      return { ok: false, error: 'An account with this email already exists.' };
+    }
+    return { ok: false, error: error.message };
+  }
+  const userId = data.user.id;
+  await dbInsert('creatorProfiles', { userId, ...creatorProfileFields(fields) });
+  await logActivity(null, { userId, entityType: 'user', entityId: userId, action: 'Creator registered' });
+  const { data: admins } = await supabase.from('profiles').select('id').eq('role', 'admin');
+  for (const admin of admins || []) {
+    await addNotification(null, { userId: admin.id, type: 'account', title: 'New creator registration', message: `${fields.firstName} ${fields.lastName} registered and is awaiting approval.` });
+  }
+  /* signUp() leaves the browser signed in as the new (pending) account —
+     sign back out so the person must explicitly log in once approved. */
+  await supabase.auth.signOut();
   return { ok: true };
-}
-
-/* Admin-initiated creator account creation — skips the pending_approval gate
-   since an admin is vouching for the account directly. */
-function adminCreateCreator(db, fields) {
-  if (db.users.some((u) => u.email.toLowerCase() === fields.email.toLowerCase())) {
-    return { ok: false, error: 'An account with this email already exists.' };
-  }
-  const userId = uid('user');
-  const profileId = uid('creator');
-  db.users.push({
-    id: userId,
-    role: 'creator',
-    email: fields.email,
-    password: fields.password,
-    firstName: fields.firstName,
-    lastName: fields.lastName,
-    status: 'approved',
-    createdAt: nowISO(),
-  });
-  db.creatorProfiles.push(defaultCreatorProfile(profileId, userId, fields));
-  logActivity(db, { userId, entityType: 'user', entityId: userId, action: 'Creator account created by admin' });
-  addNotification(db, {
-    userId,
-    type: 'account',
-    title: 'Welcome to InfluenceCrafter Creator Hub',
-    message: `Your account was created by the InfluenceCrafter team. Log in with the email and password you were given.`,
-  });
-  return { ok: true, userId };
 }
 
 function generatePassword() {
@@ -169,7 +107,32 @@ function generatePassword() {
   return out;
 }
 
-function logout() {
-  clearSession();
+/* Admin-initiated creator account creation. A static, backend-less client
+   can't call Supabase's admin.createUser() itself — that requires the
+   service_role key, which must never reach the browser. Instead this calls
+   a Supabase Edge Function (supabase/functions/admin-create-creator) that
+   holds that key server-side, verifies the caller is an admin, and creates
+   the auth user + creator profile. */
+async function adminCreateCreator(fields) {
+  const password = generatePassword();
+  const { data, error } = await supabase.functions.invoke('admin-create-creator', {
+    body: { ...fields, password },
+  });
+  if (error) {
+    let message = error.message || 'Could not create account.';
+    if (error.context && typeof error.context.json === 'function') {
+      try {
+        const body = await error.context.json();
+        if (body && body.error) message = body.error;
+      } catch (_) { /* keep the generic error.message */ }
+    }
+    return { ok: false, error: message };
+  }
+  if (data && data.error) return { ok: false, error: data.error };
+  return { ok: true, userId: data.userId, password };
+}
+
+async function logout() {
+  await supabase.auth.signOut();
   window.location.href = 'login.html';
 }

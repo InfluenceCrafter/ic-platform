@@ -11,30 +11,34 @@
   <div class="page" id="app"></div>
   <div id="modal-root"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.8/dist/umd/supabase.js"></script>
+  <script src="js/supabase-client.js"></script>
   <script src="js/db.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/ui.js"></script>
   <script>
-    const ctx = requireRole(['creator']);
     let db, user, profile, collab, campaign, brand;
     let activeTab = 'overview';
     const selectedFiles = {}; // taskId -> File
 
-    if (ctx) {
-      db = ctx.db; user = ctx.user; profile = currentCreatorProfile(db, user);
-      renderNav(null);
-      const id = new URLSearchParams(window.location.search).get('id');
-      collab = db.collaborations.find((c) => c.id === id && c.creatorId === profile.id);
-      if (!collab) {
-        document.getElementById('app').innerHTML = '<div class="card empty-state"><p>Collaboration not found.</p><a class="btn btn-primary" href="creator-dashboard.html">Back to dashboard</a></div>';
-      } else {
-        campaign = db.campaigns.find((c) => c.id === collab.campaignId);
-        brand = db.brands.find((b) => b.id === campaign.brandId);
-        render();
+    (async function () {
+      const ctx = await requireRole(['creator']);
+      if (ctx) {
+        db = ctx.db; user = ctx.user; profile = currentCreatorProfile(db, user);
+        renderNav(null, db, user);
+        const id = new URLSearchParams(window.location.search).get('id');
+        collab = db.collaborations.find((c) => c.id === id && c.creatorId === profile.id);
+        if (!collab) {
+          document.getElementById('app').innerHTML = '<div class="card empty-state"><p>Collaboration not found.</p><a class="btn btn-primary" href="creator-dashboard.html">Back to dashboard</a></div>';
+        } else {
+          campaign = db.campaigns.find((c) => c.id === collab.campaignId);
+          brand = db.brands.find((b) => b.id === campaign.brandId);
+          render();
+        }
       }
-    }
+    })();
 
-    function reload() { db = loadDB(); collab = db.collaborations.find((c) => c.id === collab.id); }
+    async function reload() { db = await loadDB(); collab = db.collaborations.find((c) => c.id === collab.id); }
 
     function render() {
       const progress = collaborationProgress(db, collab.id);
@@ -81,14 +85,17 @@
         </div>`;
     }
 
-    function acceptInvite() {
-      reload();
+    async function acceptInvite() {
+      await reload();
       collab.status = 'accepted';
       collab.acceptedDate = nowISO();
+      await dbUpdate('collaborations', collab.id, { status: collab.status, acceptedDate: collab.acceptedDate });
       const acceptTask = db.tasks.find((t) => t.collaborationId === collab.id && t.type === 'accept');
-      if (acceptTask) { acceptTask.status = 'completed'; acceptTask.completedDate = nowISO(); }
-      logActivity(db, { userId: user.id, entityType: 'collaboration', entityId: collab.id, action: 'Creator accepted invitation', campaignId: campaign.id });
-      saveDB(db);
+      if (acceptTask) {
+        acceptTask.status = 'completed'; acceptTask.completedDate = nowISO();
+        await dbUpdate('tasks', acceptTask.id, { status: acceptTask.status, completedDate: acceptTask.completedDate });
+      }
+      await logActivity(db, { userId: user.id, entityType: 'collaboration', entityId: collab.id, action: 'Creator accepted invitation', campaignId: campaign.id });
       toast('Invitation accepted.');
       render();
     }
@@ -114,13 +121,16 @@
         </div>`;
     }
 
-    function declineInvite() {
-      reload();
+    async function declineInvite() {
+      await reload();
       const reason = document.getElementById('decline-reason').value;
       collab.status = 'creator_withdrew';
-      db.tasks.filter((t) => t.collaborationId === collab.id).forEach((t) => { if (t.status === 'not_started') t.status = 'waived'; });
-      logActivity(db, { userId: user.id, entityType: 'collaboration', entityId: collab.id, action: 'Creator declined invitation', campaignId: campaign.id, meta: reason });
-      saveDB(db);
+      await dbUpdate('collaborations', collab.id, { status: collab.status });
+      for (const t of db.tasks.filter((t) => t.collaborationId === collab.id && t.status === 'not_started')) {
+        t.status = 'waived';
+        await dbUpdate('tasks', t.id, { status: 'waived' });
+      }
+      await logActivity(db, { userId: user.id, entityType: 'collaboration', entityId: collab.id, action: 'Creator declined invitation', campaignId: campaign.id, meta: reason });
       closeModal();
       toast('Invitation declined.');
       render();
@@ -237,14 +247,14 @@
       }
     }
 
-    function completeSimpleTask(taskId) {
-      reload();
+    async function completeSimpleTask(taskId) {
+      await reload();
       const t = db.tasks.find((x) => x.id === taskId);
       t.status = 'completed';
       t.completedDate = nowISO();
-      logActivity(db, { userId: user.id, entityType: 'task', entityId: t.id, action: `Task completed: ${t.title}`, campaignId: campaign.id });
-      maybeCompleteCollaboration(db, collab.id);
-      saveDB(db);
+      await dbUpdate('tasks', t.id, { status: t.status, completedDate: t.completedDate });
+      await logActivity(db, { userId: user.id, entityType: 'task', entityId: t.id, action: `Task completed: ${t.title}`, campaignId: campaign.id });
+      await maybeCompleteCollaboration(db, collab.id);
       render();
     }
 
@@ -265,17 +275,20 @@
         <button class="btn btn-primary btn-sm" onclick="submitVisitDate('${t.id}')">Submit visit date</button>`;
     }
 
-    function submitVisitDate(taskId) {
-      reload();
+    async function submitVisitDate(taskId) {
+      await reload();
       const dateVal = document.getElementById(`visit-date-${taskId}`).value;
       if (!dateVal) { toast('Please choose a date.'); return; }
       const t = db.tasks.find((x) => x.id === taskId);
       collab.visitDate = new Date(dateVal).toISOString();
       collab.visitStatus = 'date_requested';
+      await dbUpdate('collaborations', collab.id, { visitDate: collab.visitDate, visitStatus: collab.visitStatus });
       t.status = 'submitted';
-      logActivity(db, { userId: user.id, entityType: 'task', entityId: t.id, action: 'Creator selected visit date', campaignId: campaign.id });
-      db.users.filter((u) => u.role === 'admin').forEach((a) => addNotification(db, { userId: a.id, type: 'campaign', title: 'Visit date requested', message: `${user.firstName} requested ${formatDate(collab.visitDate)} for ${campaign.title}.`, campaignId: campaign.id }));
-      saveDB(db);
+      await dbUpdate('tasks', t.id, { status: 'submitted' });
+      await logActivity(db, { userId: user.id, entityType: 'task', entityId: t.id, action: 'Creator selected visit date', campaignId: campaign.id });
+      for (const a of db.users.filter((u) => u.role === 'admin')) {
+        await addNotification(db, { userId: a.id, type: 'campaign', title: 'Visit date requested', message: `${user.firstName} requested ${formatDate(collab.visitDate)} for ${campaign.title}.`, campaignId: campaign.id });
+      }
       toast('Visit date submitted for approval.');
       render();
     }
@@ -293,14 +306,13 @@
         <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="submitDraft('${t.id}')">Upload Content</button>`;
     }
 
-    function submitDraft(taskId) {
-      reload();
+    async function submitDraft(taskId) {
+      await reload();
       const file = selectedFiles[taskId];
       if (!file) { toast('Please choose a file first.'); return; }
       const t = db.tasks.find((x) => x.id === taskId);
       const version = db.contentSubmissions.filter((s) => s.collaborationId === collab.id && s.taskId === taskId).length + 1;
-      const submission = {
-        id: uid('sub'),
+      const submission = await dbInsert('contentSubmissions', {
         collaborationId: collab.id,
         taskId,
         version,
@@ -310,13 +322,15 @@
         status: 'submitted',
         submittedAt: nowISO(),
         reviewerComment: '',
-      };
+      });
       db.contentSubmissions.push(submission);
       t.status = 'submitted';
       t.adminComment = '';
-      logActivity(db, { userId: user.id, entityType: 'content', entityId: submission.id, action: `Content uploaded (v${version}): ${file.name}`, campaignId: campaign.id });
-      db.users.filter((u) => u.role === 'admin').forEach((a) => addNotification(db, { userId: a.id, type: 'campaign', title: 'New content submission', message: `${user.firstName} uploaded a draft for ${campaign.title}.`, campaignId: campaign.id }));
-      saveDB(db);
+      await dbUpdate('tasks', t.id, { status: 'submitted', adminComment: '' });
+      await logActivity(db, { userId: user.id, entityType: 'content', entityId: submission.id, action: `Content uploaded (v${version}): ${file.name}`, campaignId: campaign.id });
+      for (const a of db.users.filter((u) => u.role === 'admin')) {
+        await addNotification(db, { userId: a.id, type: 'campaign', title: 'New content submission', message: `${user.firstName} uploaded a draft for ${campaign.title}.`, campaignId: campaign.id });
+      }
       toast('Content uploaded for review.');
       delete selectedFiles[taskId];
       render();
@@ -334,27 +348,27 @@
         <button class="btn btn-primary btn-sm" onclick="submitPublish('${t.id}')">Add Published Link</button>`;
     }
 
-    function submitPublish(taskId) {
-      reload();
+    async function submitPublish(taskId) {
+      await reload();
       const url = document.getElementById(`pub-url-${taskId}`).value.trim();
       if (!url) { toast('A published URL is required.'); return; }
       const t = db.tasks.find((x) => x.id === taskId);
-      const published = {
-        id: uid('pub'),
+      const published = await dbInsert('publishedContent', {
         collaborationId: collab.id,
         platform: document.getElementById(`pub-platform-${taskId}`).value,
         url,
         publishedDate: nowISO(),
         disclosure: document.getElementById(`pub-disclosure-${taskId}`).checked,
         brandTagged: document.getElementById(`pub-tagged-${taskId}`).checked,
-      };
+      });
       db.publishedContent.push(published);
       collab.publicationDate = nowISO();
+      await dbUpdate('collaborations', collab.id, { publicationDate: collab.publicationDate });
       t.status = 'completed';
       t.completedDate = nowISO();
-      logActivity(db, { userId: user.id, entityType: 'published_content', entityId: published.id, action: 'Published link added', campaignId: campaign.id });
-      maybeCompleteCollaboration(db, collab.id);
-      saveDB(db);
+      await dbUpdate('tasks', t.id, { status: t.status, completedDate: t.completedDate });
+      await logActivity(db, { userId: user.id, entityType: 'published_content', entityId: published.id, action: 'Published link added', campaignId: campaign.id });
+      await maybeCompleteCollaboration(db, collab.id);
       toast('Published link added.');
       render();
     }
@@ -377,14 +391,13 @@
         <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="submitStats('${t.id}')">Upload Statistics</button>`;
     }
 
-    function submitStats(taskId) {
-      reload();
+    async function submitStats(taskId) {
+      await reload();
       const views = document.getElementById(`stat-views-${taskId}`).value;
       const file = selectedFiles[taskId];
       if (!views || !file) { toast('Views and a screenshot are required.'); return; }
       const t = db.tasks.find((x) => x.id === taskId);
-      const stat = {
-        id: uid('stat'),
+      const stat = await dbInsert('statistics', {
         collaborationId: collab.id,
         views: Number(views),
         reach: Number(document.getElementById(`stat-reach-${taskId}`).value || 0),
@@ -393,12 +406,14 @@
         screenshotName: file.name,
         submittedAt: nowISO(),
         status: 'submitted',
-      };
+      });
       db.statistics.push(stat);
       t.status = 'submitted';
-      logActivity(db, { userId: user.id, entityType: 'statistics', entityId: stat.id, action: 'Statistics submitted', campaignId: campaign.id });
-      db.users.filter((u) => u.role === 'admin').forEach((a) => addNotification(db, { userId: a.id, type: 'statistics', title: 'Statistics submitted', message: `${user.firstName} submitted statistics for ${campaign.title}.`, campaignId: campaign.id }));
-      saveDB(db);
+      await dbUpdate('tasks', t.id, { status: 'submitted' });
+      await logActivity(db, { userId: user.id, entityType: 'statistics', entityId: stat.id, action: 'Statistics submitted', campaignId: campaign.id });
+      for (const a of db.users.filter((u) => u.role === 'admin')) {
+        await addNotification(db, { userId: a.id, type: 'statistics', title: 'Statistics submitted', message: `${user.firstName} submitted statistics for ${campaign.title}.`, campaignId: campaign.id });
+      }
       toast('Statistics submitted.');
       delete selectedFiles[taskId];
       render();
@@ -425,13 +440,15 @@
       </div>`;
     }
 
-    function sendMessage() {
-      reload();
+    async function sendMessage() {
+      await reload();
       const text = document.getElementById('new-message').value.trim();
       if (!text) return;
-      db.messages.push({ id: uid('msg'), collaborationId: collab.id, senderId: user.id, text, timestamp: nowISO(), read: false });
-      db.users.filter((u) => u.role === 'admin').forEach((a) => addNotification(db, { userId: a.id, type: 'campaign', title: 'New campaign message', message: `${user.firstName}: ${text.slice(0, 60)}`, campaignId: campaign.id }));
-      saveDB(db);
+      const msg = await dbInsert('messages', { collaborationId: collab.id, senderId: user.id, text, timestamp: nowISO(), read: false });
+      db.messages.push(msg);
+      for (const a of db.users.filter((u) => u.role === 'admin')) {
+        await addNotification(db, { userId: a.id, type: 'campaign', title: 'New campaign message', message: `${user.firstName}: ${text.slice(0, 60)}`, campaignId: campaign.id });
+      }
       render();
     }
 

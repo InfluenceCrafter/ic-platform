@@ -79,9 +79,7 @@ function badge(status) {
 }
 
 /* ---------------- Nav bar ---------------- */
-function renderNav(activePage) {
-  const db = loadDB();
-  const user = currentUser(db);
+function renderNav(activePage, db, user) {
   const container = document.getElementById('nav');
   if (!container || !user) return;
 
