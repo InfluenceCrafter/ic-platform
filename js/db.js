@@ -64,6 +64,10 @@ const TABLES = {
     table: 'activity_log',
     map: { id: 'id', userId: 'user_id', entityType: 'entity_type', entityId: 'entity_id', action: 'action', campaignId: 'campaign_id', meta: 'meta', timestamp: 'created_at' },
   },
+  bloggerDirectory: {
+    table: 'blogger_directory',
+    map: { id: 'id', profileName: 'profile_name', instagramUrl: 'instagram_url', tiktokUrl: 'tiktok_url', email: 'email', followersCount: 'followers_count', engagementRate: 'engagement_rate', avgReach90d: 'avg_reach_90d', audienceNotes: 'audience_notes', city: 'city', languageGroup: 'language_group', collabType: 'collab_type', termsNotes: 'terms_notes', status: 'status', statsUpdatedAt: 'stats_updated_at', createdAt: 'created_at' },
+  },
 };
 
 function toRow(entity, obj) {
@@ -99,6 +103,11 @@ async function dbUpdate(entity, id, patch) {
   const { data, error } = await supabase.from(TABLES[entity].table).update(toRow(entity, patch)).eq('id', id).select().single();
   if (error) throw error;
   return toJs(entity, data);
+}
+
+async function dbDelete(entity, id) {
+  const { error } = await supabase.from(TABLES[entity].table).delete().eq('id', id);
+  if (error) throw error;
 }
 
 async function fetchAll(entity) {

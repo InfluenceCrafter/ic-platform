@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Blogger Database — InfluenceCrafter Creator Hub</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <div class="page" id="app"></div>
+  <div id="modal-root"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.8/dist/umd/supabase.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script src="js/db.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/ui.js"></script>
+  <script>
+    let db, user;
+    let filters = { search: '', city: '', languageGroup: '', collabType: '', status: '' };
+
+    (async function () {
+      const ctx = await requireRole(['admin']);
+      if (ctx) { db = ctx.db; user = ctx.user; renderNav('blogger-database.html', db, user); render(); }
+    })();
+
+    async function reload() { db = await loadDB(); }
+
+    const COLLAB_TYPE_LABELS = { barter: 'Barter', paid: 'Paid', both: 'Barter or paid' };
+    const STATUS_LABELS_LOCAL = { active: 'Active', contacted: 'Contacted', archived: 'Archived' };
+    const LANGUAGE_SUGGESTIONS = ['Čeština', 'Русский', 'English', 'Slovenčina'];
+
+    function bloggerStatusBadgeClass(status) {
+      if (status === 'active') return 'badge-positive';
+      if (status === 'archived') return 'badge-negative';
+      return 'badge-warn';
+    }
+
+    /* No TrendHero/API access on the current plan, so follower/ER numbers are
+       entered by hand. This can't auto-refresh, but it can nudge the admin to
+       recheck old numbers — same traffic-light idea as deadlineUrgency() in
+       ui.js, just measuring days *since* instead of days *until*. */
+    function statsFreshness(iso) {
+      if (!iso) return { cls: 'badge-warn', label: 'Never checked', days: Infinity };
+      const days = Math.round((new Date() - new Date(iso)) / (1000 * 60 * 60 * 24));
+      if (days > 90) return { cls: 'badge-negative', label: `Stale — ${days}d ago`, days };
+      if (days > 45) return { cls: 'badge-warn', label: `Recheck soon — ${days}d ago`, days };
+      return { cls: 'badge-positive', label: `Checked ${days}d ago`, days };
+    }
+
+    async function markStatsChecked(id) {
+      await reload();
+      const nowIso = nowISO();
+      const updated = await dbUpdate('bloggerDirectory', id, { statsUpdatedAt: nowIso });
+      const idx = db.bloggerDirectory.findIndex((x) => x.id === id);
+      if (idx >= 0) db.bloggerDirectory[idx] = updated;
+      toast('Marked as checked today.');
+      render();
+    }
+
+    function filteredRows() {
+      const q = filters.search.trim().toLowerCase();
+      return db.bloggerDirectory.filter((b) => {
+        if (filters.city && (b.city || '') !== filters.city) return false;
+        if (filters.languageGroup && (b.languageGroup || '') !== filters.languageGroup) return false;
+        if (filters.collabType && b.collabType !== filters.collabType) return false;
+        if (filters.status && b.status !== filters.status) return false;
+        if (q) {
+          const hay = `${b.profileName || ''} ${b.email || ''} ${b.instagramUrl || ''} ${b.tiktokUrl || ''}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+    }
+
+    function distinctValues(key) {
+      return [...new Set(db.bloggerDirectory.map((b) => b[key]).filter(Boolean))].sort();
+    }
+
+    function render() {
+      const rows = filteredRows();
+      const cities = distinctValues('city');
+      const langs = distinctValues('languageGroup');
+
+      document.getElementById('app').innerHTML = `
+        <div class="card-row" style="justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+          <h1 style="margin:0;">Blogger Database</h1>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" onclick="openImportCSV()">Import CSV</button>
+            <button class="btn btn-secondary btn-sm" onclick="exportCSV()">Export CSV</button>
+            <button class="btn btn-primary btn-sm" onclick="openBloggerModal()">+ Add Blogger</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:14px;">
+          <div class="grid grid-3">
+            <div>
+              <label>Search</label>
+              <input id="f-search" placeholder="Name, email, Instagram…" value="${escapeHtml(filters.search)}" oninput="onFilterChange('search', this.value)" />
+            </div>
+            <div>
+              <label>City</label>
+              <select onchange="onFilterChange('city', this.value)">
+                <option value="">All cities</option>
+                ${cities.map((c) => `<option value="${escapeHtml(c)}" ${filters.city === c ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label>Language group</label>
+              <select onchange="onFilterChange('languageGroup', this.value)">
+                <option value="">All languages</option>
+                ${langs.map((l) => `<option value="${escapeHtml(l)}" ${filters.languageGroup === l ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="grid grid-3" style="margin-top:10px;">
+            <div>
+              <label>Collaboration type</label>
+              <select onchange="onFilterChange('collabType', this.value)">
+                <option value="">All types</option>
+                ${Object.entries(COLLAB_TYPE_LABELS).map(([k, v]) => `<option value="${k}" ${filters.collabType === k ? 'selected' : ''}>${v}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label>Status</label>
+              <select onchange="onFilterChange('status', this.value)">
+                <option value="">All statuses</option>
+                ${Object.entries(STATUS_LABELS_LOCAL).map(([k, v]) => `<option value="${k}" ${filters.status === k ? 'selected' : ''}>${v}</option>`).join('')}
+              </select>
+            </div>
+            <div style="display:flex;align-items:flex-end;">
+              <button class="btn btn-ghost btn-sm" onclick="clearFilters()">Clear filters</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:14px;">
+          ${rows.length === 0 ? '<div class="card empty-state"><p>No bloggers match these filters yet.</p></div>' : renderGrouped(rows)}
+        </div>
+      `;
+    }
+
+    function onFilterChange(key, value) {
+      filters[key] = value;
+      render();
+      if (key === 'search') {
+        // keep focus + caret in the search box after re-render
+        const el = document.getElementById('f-search');
+        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+      }
+    }
+
+    function clearFilters() {
+      filters = { search: '', city: '', languageGroup: '', collabType: '', status: '' };
+      render();
+    }
+
+    function renderGrouped(rows) {
+      const byCity = {};
+      rows.forEach((b) => {
+        const city = b.city || 'No city set';
+        const lang = b.languageGroup || 'No language group set';
+        byCity[city] = byCity[city] || {};
+        byCity[city][lang] = byCity[city][lang] || [];
+        byCity[city][lang].push(b);
+      });
+      return Object.keys(byCity).sort().map((city) => `
+        <div class="card" style="margin-bottom:14px;">
+          <h3 style="margin-top:0;">${escapeHtml(city)} <span class="muted small">(${Object.values(byCity[city]).reduce((n, arr) => n + arr.length, 0)})</span></h3>
+          ${Object.keys(byCity[city]).sort().map((lang) => `
+            <div style="margin-bottom:10px;">
+              <div class="small muted" style="margin:8px 0 4px;font-weight:600;">${escapeHtml(lang)}</div>
+              ${bloggerTable(byCity[city][lang])}
+            </div>
+          `).join('')}
+        </div>
+      `).join('');
+    }
+
+    function bloggerTable(list) {
+      const sorted = [...list].sort((a, b) => statsFreshness(b.statsUpdatedAt).days - statsFreshness(a.statsUpdatedAt).days);
+      return `<div class="table-wrap"><table>
+        <tr><th>Profile</th><th>Email</th><th>Followers</th><th>ER</th><th>Avg reach (90d)</th><th>Type</th><th>Status</th><th>Data freshness</th><th>Terms / notes</th><th></th></tr>
+        ${sorted.map((b) => {
+          const fresh = statsFreshness(b.statsUpdatedAt);
+          return `
+          <tr>
+            <td>
+              <strong>${escapeHtml(b.profileName)}</strong>
+              <div class="small muted">
+                ${b.instagramUrl ? `<a href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener">Instagram</a>` : ''}
+                ${b.instagramUrl && b.tiktokUrl ? ' · ' : ''}
+                ${b.tiktokUrl ? `<a href="${escapeHtml(b.tiktokUrl)}" target="_blank" rel="noopener">TikTok</a>` : ''}
+              </div>
+            </td>
+            <td class="small">${escapeHtml(b.email || '—')}</td>
+            <td>${b.followersCount != null ? Number(b.followersCount).toLocaleString() : '—'}</td>
+            <td>${b.engagementRate != null ? b.engagementRate + '%' : '—'}</td>
+            <td>${b.avgReach90d != null ? Number(b.avgReach90d).toLocaleString() : '—'}</td>
+            <td>${escapeHtml(COLLAB_TYPE_LABELS[b.collabType] || b.collabType)}</td>
+            <td><span class="badge ${bloggerStatusBadgeClass(b.status)}">${escapeHtml(STATUS_LABELS_LOCAL[b.status] || b.status)}</span></td>
+            <td>
+              <span class="badge ${fresh.cls}">${fresh.label}</span><br/>
+              <button class="btn btn-ghost btn-sm" style="margin-top:4px;" onclick="markStatsChecked('${b.id}')">Mark checked today</button>
+            </td>
+            <td class="small">${escapeHtml(b.termsNotes || '—')}</td>
+            <td style="white-space:nowrap;">
+              <button class="btn btn-ghost btn-sm" onclick='openBloggerModal(${JSON.stringify(b.id)})'>Edit</button>
+              <button class="btn btn-ghost btn-sm" onclick="deleteBlogger('${b.id}')">Delete</button>
+            </td>
+          </tr>
+        `;
+        }).join('')}
+      </table></div>`;
+    }
+
+    /* ---------------- Add / Edit modal ---------------- */
+    function openBloggerModal(id) {
+      const b = id ? db.bloggerDirectory.find((x) => x.id === id) : null;
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">×</button>
+            <h2>${b ? 'Edit blogger' : 'Add blogger'}</h2>
+            <label>Profile name</label>
+            <input id="b-name" value="${b ? escapeHtml(b.profileName) : ''}" required />
+            <div class="grid grid-2">
+              <div><label>Instagram URL</label><input id="b-instagram" value="${b ? escapeHtml(b.instagramUrl || '') : ''}" placeholder="https://instagram.com/…" /></div>
+              <div><label>TikTok URL</label><input id="b-tiktok" value="${b ? escapeHtml(b.tiktokUrl || '') : ''}" placeholder="https://tiktok.com/@…" /></div>
+            </div>
+            <label>Email (for briefs)</label>
+            <input id="b-email" type="email" value="${b ? escapeHtml(b.email || '') : ''}" />
+            <div class="grid grid-3">
+              <div><label>Followers</label><input id="b-followers" type="number" value="${b && b.followersCount != null ? b.followersCount : ''}" /></div>
+              <div><label>ER (%)</label><input id="b-er" type="number" step="0.01" value="${b && b.engagementRate != null ? b.engagementRate : ''}" /></div>
+              <div><label>Avg reach (90d, monthly)</label><input id="b-reach" type="number" value="${b && b.avgReach90d != null ? b.avgReach90d : ''}" /></div>
+            </div>
+            <label>Audience notes</label>
+            <textarea id="b-audience" placeholder="Who follows them, demographics, spending power…">${b ? escapeHtml(b.audienceNotes || '') : ''}</textarea>
+            <div class="grid grid-2">
+              <div><label>City</label><input id="b-city" value="${b ? escapeHtml(b.city || '') : ''}" /></div>
+              <div>
+                <label>Language group</label>
+                <input id="b-lang" list="lang-suggestions" value="${b ? escapeHtml(b.languageGroup || '') : ''}" placeholder="Русский / Čeština / English…" />
+                <datalist id="lang-suggestions">${LANGUAGE_SUGGESTIONS.map((l) => `<option value="${l}">`).join('')}</datalist>
+              </div>
+            </div>
+            <div class="grid grid-2">
+              <div>
+                <label>Collaboration type</label>
+                <select id="b-collabtype">
+                  ${Object.entries(COLLAB_TYPE_LABELS).map(([k, v]) => `<option value="${k}" ${b && b.collabType === k ? 'selected' : ''}>${v}</option>`).join('')}
+                </select>
+              </div>
+              <div>
+                <label>Status</label>
+                <select id="b-status">
+                  ${Object.entries(STATUS_LABELS_LOCAL).map(([k, v]) => `<option value="${k}" ${(b ? b.status : 'active') === k ? 'selected' : ''}>${v}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+            <label>Terms / notes</label>
+            <textarea id="b-terms" placeholder="Rate if paid, barter conditions, anything to remember for next time…">${b ? escapeHtml(b.termsNotes || '') : ''}</textarea>
+            <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitBlogger(${b ? `'${b.id}'` : 'null'})">${b ? 'Save changes' : 'Add blogger'}</button>
+          </div>
+        </div>`;
+    }
+
+    function readBloggerForm() {
+      return {
+        profileName: document.getElementById('b-name').value.trim(),
+        instagramUrl: document.getElementById('b-instagram').value.trim(),
+        tiktokUrl: document.getElementById('b-tiktok').value.trim(),
+        email: document.getElementById('b-email').value.trim(),
+        followersCount: document.getElementById('b-followers').value ? Number(document.getElementById('b-followers').value) : null,
+        engagementRate: document.getElementById('b-er').value ? Number(document.getElementById('b-er').value) : null,
+        avgReach90d: document.getElementById('b-reach').value ? Number(document.getElementById('b-reach').value) : null,
+        audienceNotes: document.getElementById('b-audience').value.trim(),
+        city: document.getElementById('b-city').value.trim(),
+        languageGroup: document.getElementById('b-lang').value.trim(),
+        collabType: document.getElementById('b-collabtype').value,
+        status: document.getElementById('b-status').value,
+        termsNotes: document.getElementById('b-terms').value.trim(),
+      };
+    }
+
+    async function submitBlogger(id) {
+      const fields = readBloggerForm();
+      if (!fields.profileName) { toast('Profile name is required.'); return; }
+      await reload();
+      if (id) {
+        const updated = await dbUpdate('bloggerDirectory', id, fields);
+        const idx = db.bloggerDirectory.findIndex((x) => x.id === id);
+        if (idx >= 0) db.bloggerDirectory[idx] = updated;
+        toast('Blogger updated.');
+      } else {
+        const row = await dbInsert('bloggerDirectory', { ...fields, statsUpdatedAt: null, createdAt: nowISO() });
+        db.bloggerDirectory.push(row);
+        toast('Blogger added.');
+      }
+      closeModal();
+      render();
+    }
+
+    async function deleteBlogger(id) {
+      if (!confirm('Remove this blogger from the database? This cannot be undone.')) return;
+      await reload();
+      await dbDelete('bloggerDirectory', id);
+      db.bloggerDirectory = db.bloggerDirectory.filter((x) => x.id !== id);
+      toast('Blogger removed.');
+      render();
+    }
+
+    function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+
+    /* ---------------- CSV import (migrating the existing Excel sheet) ---------------- */
+    const CSV_FIELD_ALIASES = {
+      profileName: ['profilename', 'name', 'имя', 'profile', 'blogger'],
+      instagramUrl: ['instagramurl', 'instagram', 'ig'],
+      tiktokUrl: ['tiktokurl', 'tiktok', 'tt'],
+      email: ['email', 'e-mail', 'почта', 'имейл'],
+      followersCount: ['followerscount', 'followers', 'подписчики'],
+      engagementRate: ['engagementrate', 'er', 'engagement'],
+      avgReach90d: ['avgreach90d', 'reach', 'avgreach', 'охват'],
+      audienceNotes: ['audiencenotes', 'audience', 'аудитория'],
+      city: ['city', 'город'],
+      languageGroup: ['languagegroup', 'language', 'язык'],
+      collabType: ['collabtype', 'type', 'бартер/оплата', 'collab'],
+      termsNotes: ['termsnotes', 'terms', 'notes', 'условия', 'заметки'],
+      status: ['status', 'статус'],
+    };
+
+    function normalizeHeader(h) {
+      return h.trim().toLowerCase().replace(/[\s_]+/g, '');
+    }
+
+    function parseCSVLine(line) {
+      const out = [];
+      let cur = '', inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (inQuotes) {
+          if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+          else if (ch === '"') { inQuotes = false; }
+          else { cur += ch; }
+        } else if (ch === '"') { inQuotes = true; }
+        else if (ch === ',' || ch === '\t') { out.push(cur); cur = ''; }
+        else { cur += ch; }
+      }
+      out.push(cur);
+      return out.map((s) => s.trim());
+    }
+
+    function openImportCSV() {
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">×</button>
+            <h2>Import from Excel / CSV</h2>
+            <p class="small muted">Copy the rows from your Excel sheet (including the header row) and paste them below — comma or tab separated both work. Recognized columns: profile name, Instagram, TikTok, email, followers, ER, avg reach, audience notes, city, language group, collab type (barter/paid/both), terms/notes, status.</p>
+            <textarea id="csv-input" rows="10" placeholder="Name, Instagram, City, Language...&#10;Anna K., https://instagram.com/annak, Prague, Русский..."></textarea>
+            <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitImportCSV()">Import rows</button>
+          </div>
+        </div>`;
+    }
+
+    async function submitImportCSV() {
+      const raw = document.getElementById('csv-input').value;
+      const lines = raw.split(/\r?\n/).filter((l) => l.trim().length);
+      if (lines.length < 2) { toast('Paste a header row plus at least one data row.'); return; }
+      const headers = parseCSVLine(lines[0]).map(normalizeHeader);
+      const colMap = headers.map((h) => {
+        const match = Object.entries(CSV_FIELD_ALIASES).find(([, aliases]) => aliases.includes(h));
+        return match ? match[0] : null;
+      });
+      if (!colMap.includes('profileName')) { toast('Could not find a "name" column — check the header row.'); return; }
+
+      const newRows = lines.slice(1).map((line) => {
+        const cells = parseCSVLine(line);
+        const obj = { collabType: 'barter', status: 'active', statsUpdatedAt: null, createdAt: nowISO() };
+        colMap.forEach((field, i) => {
+          if (!field || cells[i] === undefined || cells[i] === '') return;
+          if (['followersCount', 'avgReach90d'].includes(field)) obj[field] = Number(cells[i].replace(/[^\d.-]/g, '')) || null;
+          else if (field === 'engagementRate') obj[field] = Number(cells[i].replace(/[^\d.-]/g, '')) || null;
+          else obj[field] = cells[i];
+        });
+        return obj;
+      }).filter((o) => o.profileName);
+
+      if (newRows.length === 0) { toast('No valid rows found.'); return; }
+      await reload();
+      const inserted = await dbInsertMany('bloggerDirectory', newRows);
+      db.bloggerDirectory.push(...inserted);
+      await logActivity(db, { userId: user.id, entityType: 'blogger_directory', entityId: null, action: `Imported ${inserted.length} bloggers from CSV` });
+      closeModal();
+      toast(`Imported ${inserted.length} blogger${inserted.length === 1 ? '' : 's'}.`);
+      render();
+    }
+
+    /* ---------------- CSV export ---------------- */
+    function exportCSV() {
+      const rows = filteredRows();
+      const header = ['Profile name', 'Instagram', 'TikTok', 'Email', 'Followers', 'ER (%)', 'Avg reach (90d)', 'Audience notes', 'City', 'Language group', 'Collab type', 'Status', 'Terms / notes'];
+      const body = rows.map((b) => [
+        b.profileName, b.instagramUrl, b.tiktokUrl, b.email, b.followersCount, b.engagementRate, b.avgReach90d,
+        b.audienceNotes, b.city, b.languageGroup, COLLAB_TYPE_LABELS[b.collabType] || b.collabType, STATUS_LABELS_LOCAL[b.status] || b.status, b.termsNotes,
+      ]);
+      const csv = [header, ...body].map((r) => r.map((v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'blogger_database.csv';
+      a.click();
+    }
+  </script>
+</body>
+</html>

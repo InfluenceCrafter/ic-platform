@@ -200,6 +200,31 @@ create table if not exists activity_log (
 );
 
 -- ============================================================
+-- 4b. BLOGGER DIRECTORY (admin-only internal database, replaces the
+-- manual Excel workflow: creators fill a Google Form, admin copies the
+-- approved ones in here, grouped by city -> language group)
+-- ============================================================
+create table if not exists blogger_directory (
+  id uuid primary key default gen_random_uuid(),
+  profile_name text not null,
+  instagram_url text,
+  tiktok_url text,
+  email text,
+  followers_count integer,
+  engagement_rate numeric(5,2),
+  avg_reach_90d integer,
+  audience_notes text,
+  city text,
+  language_group text,
+  collab_type text not null default 'barter' check (collab_type in ('barter', 'paid', 'both')),
+  terms_notes text,
+  status text not null default 'active' check (status in ('active', 'contacted', 'archived')),
+  stats_updated_at timestamptz,
+  created_at timestamptz not null default now(),
+  created_by uuid references profiles(id) default auth.uid()
+);
+
+-- ============================================================
 -- 5. HELPER: is_admin() — used by RLS policies below
 -- ============================================================
 create or replace function is_admin()
@@ -260,6 +285,7 @@ alter table statistics enable row level security;
 alter table messages enable row level security;
 alter table notifications enable row level security;
 alter table activity_log enable row level security;
+alter table blogger_directory enable row level security;
 
 -- profiles
 -- Any authenticated user can also see admin rows specifically (role = 'admin')
@@ -422,6 +448,11 @@ create policy "activity_log_select" on activity_log for select
 drop policy if exists "activity_log_insert" on activity_log;
 create policy "activity_log_insert" on activity_log for insert with check (auth.role() = 'authenticated');
 
+-- blogger_directory (admin-only internal tool — creators never see this table)
+drop policy if exists "blogger_directory_all" on blogger_directory;
+create policy "blogger_directory_all" on blogger_directory for all
+  using (is_admin()) with check (is_admin());
+
 -- Base table-level privileges. RLS policies above only restrict rows;
 -- Postgres also requires the underlying GRANT before a role can touch a
 -- table at all. No table has a delete policy, so delete is intentionally
@@ -439,5 +470,10 @@ grant select, insert, update on
   statistics,
   messages,
   notifications,
-  activity_log
+  activity_log,
+  blogger_directory
 to authenticated;
+
+-- blogger_directory needs delete too (admin cleans up bad/duplicate entries),
+-- unlike every other table above.
+grant delete on blogger_directory to authenticated;
