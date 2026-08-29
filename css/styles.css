@@ -162,12 +162,25 @@ textarea { resize: vertical; min-height: 80px; }
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
 
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; }
 th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
 th { color: var(--ink-faint); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; }
 tbody tr { transition: background 0.1s ease; }
 tbody tr:hover { background: var(--paper); }
 .table-wrap { overflow-x: auto; }
+
+/* Frozen header: the header row stays visible while scrolling a long
+   table, like a frozen row in Excel. Needs border-collapse: separate
+   above — sticky th inside a collapsed table is unreliable in Safari. */
+.table-scroll { overflow: auto; max-height: 64vh; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
+.table-scroll table { margin: 0; }
+.table-scroll thead th { position: sticky; top: 0; background: var(--card); z-index: 2; box-shadow: inset 0 -1px 0 var(--line); }
+.table-scroll tbody tr:last-child td { border-bottom: none; }
+
+/* Sticky page toolbar (title / search / add button) — stays visible
+   while scrolling a long blogger list, `top` offset is set from JS to
+   match the live nav height. */
+.db-toolbar { position: sticky; z-index: 15; background: rgba(247, 247, 248, 0.92); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); padding: 4px 0 12px; margin: -4px 0 0; }
 
 .stat-tile { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; text-align: center; box-shadow: var(--shadow-sm); }
 .stat-tile .num { font-size: 27px; font-weight: 800; letter-spacing: -0.02em; }

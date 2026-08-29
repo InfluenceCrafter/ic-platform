@@ -18,7 +18,14 @@
   <script src="js/ui.js"></script>
   <script>
     let db, user;
-    let filters = { search: '', city: '', languageGroup: '', audienceCountry: '', collabType: '', status: '' };
+
+    /* Light filters (search, collab type, status) apply everywhere.
+       City / language are navigated as tabs (no more endless scrolling
+       through every group at once — click a tab, see just that slice). */
+    let filters = { search: '', collabType: '', status: '' };
+    let activeCity = null; // null = "All cities"
+    let activeLang = null; // null = "All languages" (scoped to activeCity)
+    let originFilter = []; // quick RU/UA/Other pills, OR-filter within current tab
 
     (async function () {
       const ctx = await requireRole(['admin']);
@@ -30,10 +37,15 @@
     const COLLAB_TYPE_LABELS = { barter: 'Barter', paid: 'Paid', both: 'Barter or paid' };
     const STATUS_LABELS_LOCAL = { active: 'Active', contacted: 'Contacted', archived: 'Archived' };
     const LANGUAGE_SUGGESTIONS = ['Čeština', 'Русский', 'English', 'Slovenčina'];
-    /* Language ("Русский") and audience country are tracked separately —
-       a Russian-speaking creator's audience can be RU, UA, or both, and
-       lumping that into one "Русский" tag loses that distinction. */
-    const AUDIENCE_COUNTRIES = ['RU', 'UA', 'Other'];
+    /* This describes the blogger themself — are they a Russian or Ukrainian
+       creator? — not their audience. It's a single choice ("either/or"),
+       shown as a small flag badge everywhere. */
+    const ORIGIN_OPTIONS = ['RU', 'UA', 'Other'];
+
+    function originEmoji(c) { return c === 'RU' ? '🇷🇺' : c === 'UA' ? '🇺🇦' : '⚪'; }
+    function originColor(c) { return c === 'RU' ? '#1d4ed8' : c === 'UA' ? '#a16207' : 'var(--ink-soft)'; }
+    function originBg(c) { return c === 'RU' ? '#eff6ff' : c === 'UA' ? '#fefce8' : 'var(--grey-bg)'; }
+    function truncate(s, n) { if (!s) return '—'; return s.length > n ? s.slice(0, n) + '…' : s; }
 
     function bloggerStatusBadgeClass(status) {
       if (status === 'active') return 'badge-positive';
@@ -63,151 +75,185 @@
       render();
     }
 
-    function filteredRows() {
-      const q = filters.search.trim().toLowerCase();
-      return db.bloggerDirectory.filter((b) => {
-        if (filters.city && (b.city || '') !== filters.city) return false;
-        if (filters.languageGroup && (b.languageGroup || '') !== filters.languageGroup) return false;
-        if (filters.audienceCountry && !(b.audienceCountries || []).includes(filters.audienceCountry)) return false;
+    /* ---------------- render: sticky toolbar + tabs + table ---------------- */
+    function countBy(list, key, fallback) {
+      const counts = {};
+      list.forEach((b) => {
+        const v = (b[key] && String(b[key]).trim()) || fallback;
+        counts[v] = (counts[v] || 0) + 1;
+      });
+      return counts;
+    }
+
+    function applyLightFilters(list) {
+      return list.filter((b) => {
+        if (originFilter.length && !(b.audienceCountries || []).some((c) => originFilter.includes(c))) return false;
         if (filters.collabType && b.collabType !== filters.collabType) return false;
         if (filters.status && b.status !== filters.status) return false;
-        if (q) {
-          const hay = `${b.profileName || ''} ${b.email || ''} ${b.instagramUrl || ''} ${b.tiktokUrl || ''}`.toLowerCase();
-          if (!hay.includes(q)) return false;
-        }
         return true;
       });
     }
 
-    function distinctValues(key) {
-      return [...new Set(db.bloggerDirectory.map((b) => b[key]).filter(Boolean))].sort();
-    }
-
     function render() {
-      const rows = filteredRows();
-      const cities = distinctValues('city');
-      const langs = distinctValues('languageGroup');
+      const all = db.bloggerDirectory;
+      const q = filters.search.trim();
 
       document.getElementById('app').innerHTML = `
-        <div class="card-row" style="justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
-          <h1 style="margin:0;">Blogger Database</h1>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-secondary btn-sm" onclick="openImportCSV()">Import CSV</button>
-            <button class="btn btn-secondary btn-sm" onclick="exportCSV()">Export CSV</button>
-            <button class="btn btn-primary btn-sm" onclick="openBloggerModal()">+ Add Blogger</button>
+        <div class="db-toolbar" id="db-toolbar">
+          <div class="card-row" style="align-items:center;flex-wrap:wrap;gap:10px;">
+            <h1 style="margin:0;">Blogger Database</h1>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <input id="f-search" style="width:220px;" placeholder="Search name, email, IG…" value="${escapeHtml(filters.search)}" oninput="onSearchChange(this.value)" />
+              <button class="btn btn-secondary btn-sm" onclick="openImportCSV()">Import CSV</button>
+              <button class="btn btn-secondary btn-sm" onclick="exportCSV()">Export CSV</button>
+              <button class="btn btn-primary btn-sm" onclick="openBloggerModal()">+ Add Blogger</button>
+            </div>
           </div>
+          ${q ? '' : renderCityTabs(all)}
         </div>
-
-        <div class="card" style="margin-top:14px;">
-          <div class="grid grid-3">
-            <div>
-              <label>Search</label>
-              <input id="f-search" placeholder="Name, email, Instagram…" value="${escapeHtml(filters.search)}" oninput="onFilterChange('search', this.value)" />
-            </div>
-            <div>
-              <label>City</label>
-              <select onchange="onFilterChange('city', this.value)">
-                <option value="">All cities</option>
-                ${cities.map((c) => `<option value="${escapeHtml(c)}" ${filters.city === c ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
-              </select>
-            </div>
-            <div>
-              <label>Language group</label>
-              <select onchange="onFilterChange('languageGroup', this.value)">
-                <option value="">All languages</option>
-                ${langs.map((l) => `<option value="${escapeHtml(l)}" ${filters.languageGroup === l ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
-              </select>
-            </div>
-          </div>
-          <div class="grid grid-3" style="margin-top:10px;">
-            <div>
-              <label>Audience country</label>
-              <select onchange="onFilterChange('audienceCountry', this.value)">
-                <option value="">All audiences</option>
-                ${AUDIENCE_COUNTRIES.map((c) => `<option value="${c}" ${filters.audienceCountry === c ? 'selected' : ''}>${c}</option>`).join('')}
-              </select>
-            </div>
-            <div>
-              <label>Collaboration type</label>
-              <select onchange="onFilterChange('collabType', this.value)">
-                <option value="">All types</option>
-                ${Object.entries(COLLAB_TYPE_LABELS).map(([k, v]) => `<option value="${k}" ${filters.collabType === k ? 'selected' : ''}>${v}</option>`).join('')}
-              </select>
-            </div>
-            <div>
-              <label>Status</label>
-              <select onchange="onFilterChange('status', this.value)">
-                <option value="">All statuses</option>
-                ${Object.entries(STATUS_LABELS_LOCAL).map(([k, v]) => `<option value="${k}" ${filters.status === k ? 'selected' : ''}>${v}</option>`).join('')}
-              </select>
-            </div>
-          </div>
-          <div style="margin-top:10px;">
-            <button class="btn btn-ghost btn-sm" onclick="clearFilters()">Clear filters</button>
-          </div>
-        </div>
-
         <div style="margin-top:14px;">
-          ${rows.length === 0 ? '<div class="card empty-state"><p>No bloggers match these filters yet.</p></div>' : renderGrouped(rows)}
+          ${q ? renderSearchResults(all, q) : renderTabbedView(all)}
         </div>
       `;
-    }
 
-    function onFilterChange(key, value) {
-      filters[key] = value;
-      render();
-      if (key === 'search') {
-        // keep focus + caret in the search box after re-render
+      const toolbar = document.getElementById('db-toolbar');
+      const navEl = document.getElementById('nav');
+      if (toolbar && navEl) toolbar.style.top = navEl.offsetHeight + 'px';
+
+      if (q) {
         const el = document.getElementById('f-search');
         if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
       }
     }
 
-    function clearFilters() {
-      filters = { search: '', city: '', languageGroup: '', audienceCountry: '', collabType: '', status: '' };
+    function renderCityTabs(all) {
+      const counts = countBy(all, 'city', 'No city set');
+      const cities = Object.keys(counts).sort();
+      if (activeCity && !cities.includes(activeCity)) activeCity = null;
+      const tabs = ['', ...cities];
+      return `<div class="tabs" style="margin:10px 0 0;">
+        ${tabs.map((c) => {
+          const isAll = c === '';
+          const label = isAll ? `All cities <span class="muted small">(${all.length})</span>` : `${escapeHtml(c)} <span class="muted small">(${counts[c]})</span>`;
+          const isActive = isAll ? !activeCity : c === activeCity;
+          return `<button class="${isActive ? 'active' : ''}" data-city="${escapeHtml(c)}" onclick="setCityTab(this.dataset.city)">${label}</button>`;
+        }).join('')}
+      </div>`;
+    }
+
+    function setCityTab(city) { activeCity = city || null; activeLang = null; render(); }
+    function setLangTab(lang) { activeLang = lang || null; render(); }
+
+    function onSearchChange(value) { filters.search = value; render(); }
+    function onFilterChange(key, value) { filters[key] = value; render(); }
+    function clearLightFilters() { originFilter = []; filters.collabType = ''; filters.status = ''; render(); }
+
+    function toggleOriginFilter(el) {
+      el.classList.toggle('selected');
+      originFilter = [...document.querySelectorAll('#origin-filter-chips .chip.selected')].map((c) => c.dataset.origin);
       render();
     }
 
-    function renderGrouped(rows) {
-      const byCity = {};
-      rows.forEach((b) => {
-        const city = b.city || 'No city set';
-        const lang = b.languageGroup || 'No language group set';
-        byCity[city] = byCity[city] || {};
-        byCity[city][lang] = byCity[city][lang] || [];
-        byCity[city][lang].push(b);
-      });
-      return Object.keys(byCity).sort().map((city) => `
-        <div class="card" style="margin-bottom:14px;">
-          <h3 style="margin-top:0;">${escapeHtml(city)} <span class="muted small">(${Object.values(byCity[city]).reduce((n, arr) => n + arr.length, 0)})</span></h3>
-          ${Object.keys(byCity[city]).sort().map((lang) => `
-            <div style="margin-bottom:10px;">
-              <div class="small muted" style="margin:8px 0 4px;font-weight:600;">${escapeHtml(lang)}</div>
-              ${bloggerTable(byCity[city][lang])}
+    function renderQuickFilters() {
+      return `
+        <div style="display:flex;flex-wrap:wrap;gap:18px;align-items:flex-end;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line-soft);">
+          <div>
+            <div class="small muted" style="margin-bottom:5px;font-weight:600;">Blogger</div>
+            <div class="chip-select" id="origin-filter-chips">
+              ${ORIGIN_OPTIONS.map((c) => `<div class="chip ${originFilter.includes(c) ? 'selected' : ''}" data-origin="${c}" onclick="toggleOriginFilter(this)">${originEmoji(c)} ${c}</div>`).join('')}
             </div>
-          `).join('')}
+          </div>
+          <div>
+            <div class="small muted" style="margin-bottom:5px;font-weight:600;">Type</div>
+            <select style="width:auto;" onchange="onFilterChange('collabType', this.value)">
+              <option value="">All</option>
+              ${Object.entries(COLLAB_TYPE_LABELS).map(([k, v]) => `<option value="${k}" ${filters.collabType === k ? 'selected' : ''}>${v}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <div class="small muted" style="margin-bottom:5px;font-weight:600;">Status</div>
+            <select style="width:auto;" onchange="onFilterChange('status', this.value)">
+              <option value="">All</option>
+              ${Object.entries(STATUS_LABELS_LOCAL).map(([k, v]) => `<option value="${k}" ${filters.status === k ? 'selected' : ''}>${v}</option>`).join('')}
+            </select>
+          </div>
+          ${(originFilter.length || filters.collabType || filters.status) ? '<button class="btn btn-ghost btn-sm" onclick="clearLightFilters()">Clear filters</button>' : ''}
         </div>
-      `).join('');
+      `;
+    }
+
+    function renderTabbedView(all) {
+      const cityScoped = activeCity ? all.filter((b) => ((b.city || '').trim() || 'No city set') === activeCity) : all;
+      const langCounts = countBy(cityScoped, 'languageGroup', 'No language group set');
+      const langs = Object.keys(langCounts).sort();
+      if (activeLang && !langs.includes(activeLang)) activeLang = null;
+      const langTabs = ['', ...langs];
+
+      const langScoped = activeLang ? cityScoped.filter((b) => ((b.languageGroup || '').trim() || 'No language group set') === activeLang) : cityScoped;
+      const rows = applyLightFilters(langScoped);
+
+      return `
+        <div class="card" style="margin-bottom:0;">
+          ${langTabs.length > 1 ? `<div class="tabs" style="margin-bottom:12px;">
+            ${langTabs.map((l) => {
+              const isAll = l === '';
+              const label = isAll ? `All languages <span class="muted small">(${cityScoped.length})</span>` : `${escapeHtml(l)} <span class="muted small">(${langCounts[l]})</span>`;
+              const isActive = isAll ? !activeLang : l === activeLang;
+              return `<button class="${isActive ? 'active' : ''}" data-lang="${escapeHtml(l)}" onclick="setLangTab(this.dataset.lang)">${label}</button>`;
+            }).join('')}
+          </div>` : ''}
+          ${renderQuickFilters()}
+          ${rows.length === 0
+            ? `<div class="empty-state"><p>No bloggers match this view yet.</p><button class="btn btn-primary btn-sm" onclick="openBloggerModal()">+ Add blogger</button></div>`
+            : bloggerTable(rows)}
+        </div>
+      `;
+    }
+
+    function renderSearchResults(all, q) {
+      const needle = q.trim().toLowerCase();
+      const rows = applyLightFilters(all).filter((b) => {
+        const hay = `${b.profileName || ''} ${b.email || ''} ${b.instagramUrl || ''} ${b.tiktokUrl || ''} ${b.city || ''} ${b.languageGroup || ''}`.toLowerCase();
+        return hay.includes(needle);
+      });
+      return `
+        <div class="card">
+          <div class="card-row" style="align-items:center;margin-bottom:10px;">
+            <h3 style="margin:0;">Search results <span class="muted small">(${rows.length})</span></h3>
+            <button class="btn btn-ghost btn-sm" onclick="onSearchChange('')">✕ Clear search</button>
+          </div>
+          ${renderQuickFilters()}
+          ${rows.length === 0 ? '<div class="empty-state"><p>Nothing found.</p></div>' : bloggerTable(rows)}
+        </div>
+      `;
     }
 
     function bloggerTable(list) {
       const sorted = [...list].sort((a, b) => statsFreshness(b.statsUpdatedAt).days - statsFreshness(a.statsUpdatedAt).days);
-      return `<div class="table-wrap"><table>
-        <tr><th>Profile</th><th>Email</th><th>Audience</th><th>Followers</th><th>ER</th><th>Avg reach (90d)</th><th>Type</th><th>Status</th><th>Data freshness</th><th>Terms / notes</th><th></th></tr>
+      return `<div class="table-scroll"><table>
+        <thead><tr><th>Profile</th><th>Email</th><th>Origin</th><th>Followers</th><th>ER</th><th>Avg reach</th><th>Type</th><th>Status</th><th>Freshness</th><th>Terms / notes</th><th></th></tr></thead>
+        <tbody>
         ${sorted.map((b) => {
           const fresh = statsFreshness(b.statsUpdatedAt);
+          const initial = (b.profileName || '?').trim().charAt(0).toUpperCase() || '?';
+          const origin = (b.audienceCountries || [])[0] || null;
           return `
           <tr>
             <td>
-              <strong>${escapeHtml(b.profileName)}</strong>
-              <div class="small muted">
-                ${b.instagramUrl ? `<a href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener">Instagram</a>` : ''}
-                ${b.instagramUrl && b.tiktokUrl ? ' · ' : ''}
-                ${b.tiktokUrl ? `<a href="${escapeHtml(b.tiktokUrl)}" target="_blank" rel="noopener">TikTok</a>` : ''}
+              <div style="display:flex;align-items:center;gap:10px;">
+                <div class="avatar" style="width:30px;height:30px;font-size:12.5px;flex-shrink:0;${origin ? `background:${originColor(origin)};` : ''}">${escapeHtml(initial)}</div>
+                <div>
+                  <strong>${escapeHtml(b.profileName)}</strong>
+                  <div class="small muted">
+                    ${b.instagramUrl ? `<a href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener">Instagram</a>` : ''}
+                    ${b.instagramUrl && b.tiktokUrl ? ' · ' : ''}
+                    ${b.tiktokUrl ? `<a href="${escapeHtml(b.tiktokUrl)}" target="_blank" rel="noopener">TikTok</a>` : ''}
+                  </div>
+                </div>
               </div>
             </td>
             <td class="small">${escapeHtml(b.email || '—')}</td>
-            <td>${(b.audienceCountries || []).length ? b.audienceCountries.map((c) => `<span class="badge badge-neutral" style="margin:1px;">${escapeHtml(c)}</span>`).join('') : '<span class="muted small">—</span>'}</td>
+            <td>${origin ? `<span class="badge" style="background:${originBg(origin)};color:${originColor(origin)};">${originEmoji(origin)} ${origin}</span>` : '<span class="muted small">—</span>'}</td>
             <td>${b.followersCount != null ? Number(b.followersCount).toLocaleString() : '—'}</td>
             <td>${b.engagementRate != null ? b.engagementRate + '%' : '—'}</td>
             <td>${b.avgReach90d != null ? Number(b.avgReach90d).toLocaleString() : '—'}</td>
@@ -215,9 +261,9 @@
             <td><span class="badge ${bloggerStatusBadgeClass(b.status)}">${escapeHtml(STATUS_LABELS_LOCAL[b.status] || b.status)}</span></td>
             <td>
               <span class="badge ${fresh.cls}">${fresh.label}</span><br/>
-              <button class="btn btn-ghost btn-sm" style="margin-top:4px;" onclick="markStatsChecked('${b.id}')">Mark checked today</button>
+              <button class="btn btn-ghost btn-sm" style="margin-top:4px;" onclick="markStatsChecked('${b.id}')">Mark checked</button>
             </td>
-            <td class="small">${escapeHtml(b.termsNotes || '—')}</td>
+            <td class="small" style="max-width:180px;" title="${escapeHtml(b.termsNotes || '')}">${escapeHtml(truncate(b.termsNotes, 40))}</td>
             <td style="white-space:nowrap;">
               <button class="btn btn-ghost btn-sm" onclick='openBloggerModal(${JSON.stringify(b.id)})'>Edit</button>
               <button class="btn btn-ghost btn-sm" onclick="deleteBlogger('${b.id}')">Delete</button>
@@ -225,6 +271,7 @@
           </tr>
         `;
         }).join('')}
+        </tbody>
       </table></div>`;
     }
 
@@ -259,9 +306,9 @@
                 <datalist id="lang-suggestions">${LANGUAGE_SUGGESTIONS.map((l) => `<option value="${l}">`).join('')}</datalist>
               </div>
             </div>
-            <label>Audience country <span class="field-hint" style="display:inline;">(who actually follows them — can be more than one)</span></label>
+            <label>Blogger origin <span class="field-hint" style="display:inline;">(is the blogger themself RU or UA — not their audience; click again to clear)</span></label>
             <div class="chip-select" id="audience-chips">
-              ${AUDIENCE_COUNTRIES.map((c) => `<div class="chip ${b && (b.audienceCountries || []).includes(c) ? 'selected' : ''}" data-country="${c}" onclick="toggleChip(this)">${c}</div>`).join('')}
+              ${ORIGIN_OPTIONS.map((c) => `<div class="chip ${b && (b.audienceCountries || []).includes(c) ? 'selected' : ''}" data-country="${c}" onclick="selectOriginChip(this)">${originEmoji(c)} ${c}</div>`).join('')}
             </div>
             <div class="grid grid-2">
               <div>
@@ -284,7 +331,13 @@
         </div>`;
     }
 
-    function toggleChip(el) { el.classList.toggle('selected'); }
+    /* Blogger origin is either/or — selecting one clears the others.
+       Clicking the already-selected chip clears it back to "unset". */
+    function selectOriginChip(el) {
+      const wasSelected = el.classList.contains('selected');
+      [...el.parentElement.children].forEach((c) => c.classList.remove('selected'));
+      if (!wasSelected) el.classList.add('selected');
+    }
 
     function readBloggerForm() {
       return {
@@ -346,7 +399,7 @@
       audienceNotes: ['audiencenotes', 'audience', 'аудитория'],
       city: ['city', 'город'],
       languageGroup: ['languagegroup', 'language', 'язык'],
-      audienceCountries: ['audiencecountry', 'audiencecountries', 'country', 'countries', 'ru/ua', 'страна', 'страны', 'страна аудитории'],
+      audienceCountries: ['origin', 'bloggerorigin', 'ru/ua', 'ruua', 'национальность', 'происхождение', 'страна'],
       collabType: ['collabtype', 'type', 'бартер/оплата', 'collab'],
       termsNotes: ['termsnotes', 'terms', 'notes', 'условия', 'заметки'],
       status: ['status', 'статус'],
@@ -379,7 +432,7 @@
           <div class="modal">
             <button class="modal-close" onclick="closeModal()">×</button>
             <h2>Import from Excel / CSV</h2>
-            <p class="small muted">Copy the rows from your Excel sheet (including the header row) and paste them below — comma or tab separated both work. Recognized columns: profile name, Instagram, TikTok, email, followers, ER, avg reach, audience notes, city, language group, audience country (RU/UA, can combine like "RU/UA"), collab type (barter/paid/both), terms/notes, status.</p>
+            <p class="small muted">Copy the rows from your Excel sheet (including the header row) and paste them below — comma or tab separated both work. Recognized columns: profile name, Instagram, TikTok, email, followers, ER, avg reach, audience notes, city, language group, blogger origin (RU or UA — the blogger themself, not their audience), collab type (barter/paid/both), terms/notes, status.</p>
             <textarea id="csv-input" rows="10" placeholder="Name, Instagram, City, Language...&#10;Anna K., https://instagram.com/annak, Prague, Русский..."></textarea>
             <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitImportCSV()">Import rows</button>
           </div>
@@ -405,8 +458,8 @@
           if (['followersCount', 'avgReach90d'].includes(field)) obj[field] = Number(cells[i].replace(/[^\d.-]/g, '')) || null;
           else if (field === 'engagementRate') obj[field] = Number(cells[i].replace(/[^\d.-]/g, '')) || null;
           else if (field === 'audienceCountries') {
-            obj[field] = cells[i].split(/[/,;]+/).map((s) => s.trim().toUpperCase()).filter(Boolean)
-              .map((s) => (s === 'RU' || s === 'UA') ? s : 'Other');
+            const first = cells[i].split(/[/,;]+/).map((s) => s.trim().toUpperCase()).filter(Boolean)[0];
+            obj[field] = first ? [(first === 'RU' || first === 'UA') ? first : 'Other'] : [];
           }
           else obj[field] = cells[i];
         });
@@ -425,8 +478,8 @@
 
     /* ---------------- CSV export ---------------- */
     function exportCSV() {
-      const rows = filteredRows();
-      const header = ['Profile name', 'Instagram', 'TikTok', 'Email', 'Followers', 'ER (%)', 'Avg reach (90d)', 'Audience notes', 'City', 'Language group', 'Audience country', 'Collab type', 'Status', 'Terms / notes'];
+      const rows = applyLightFilters(db.bloggerDirectory);
+      const header = ['Profile name', 'Instagram', 'TikTok', 'Email', 'Followers', 'ER (%)', 'Avg reach (90d)', 'Audience notes', 'City', 'Language group', 'Blogger origin (RU/UA)', 'Collab type', 'Status', 'Terms / notes'];
       const body = rows.map((b) => [
         b.profileName, b.instagramUrl, b.tiktokUrl, b.email, b.followersCount, b.engagementRate, b.avgReach90d,
         b.audienceNotes, b.city, b.languageGroup, (b.audienceCountries || []).join('/'), COLLAB_TYPE_LABELS[b.collabType] || b.collabType, STATUS_LABELS_LOCAL[b.status] || b.status, b.termsNotes,
