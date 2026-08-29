@@ -38,6 +38,9 @@
     const COLLAB_TYPE_LABELS = { barter: 'Barter', paid: 'Paid', both: 'Barter or paid' };
     const STATUS_LABELS_LOCAL = { active: 'Active', contacted: 'Contacted', archived: 'Archived' };
     const LANGUAGE_SUGGESTIONS = ['Čeština', 'Русский', 'English', 'Slovenčina'];
+    /* Defaults shown in the city dropdown, in local spelling — the list
+       grows on its own as new cities get used (see buildOptionList). */
+    const CITY_SUGGESTIONS = ['Praha', 'Plzeň', 'Brno', 'Kraków', 'Warszawa'];
     /* This describes the blogger themself (nationality / market they belong
        to) — not their audience. It's a single choice ("either/or"). The five
        common markets are one-click chips; anything else (Polish, German,
@@ -97,13 +100,45 @@
     }
 
     /* ---------------- render: sticky toolbar + tabs + table ---------------- */
-    function countBy(list, key, fallback) {
-      const counts = {};
+    /* City/language grouping is case-insensitive on purpose — "Prague" and
+       "prague" typed by different people must land in the same group, not
+       fork into a second tab. The tab label shown is whichever casing was
+       used most often, so one stray lowercase entry doesn't relabel the
+       whole group either. */
+    function groupKey(raw, fallback) { return ((raw && String(raw).trim()) || fallback).toLowerCase(); }
+
+    function countByNormalized(list, key, fallback) {
+      const variantsByKey = {};
       list.forEach((b) => {
-        const v = (b[key] && String(b[key]).trim()) || fallback;
-        counts[v] = (counts[v] || 0) + 1;
+        const raw = (b[key] && String(b[key]).trim()) || fallback;
+        const nk = raw.toLowerCase();
+        variantsByKey[nk] = variantsByKey[nk] || {};
+        variantsByKey[nk][raw] = (variantsByKey[nk][raw] || 0) + 1;
       });
-      return counts;
+      const buckets = {};
+      Object.entries(variantsByKey).forEach(([nk, variants]) => {
+        const label = Object.entries(variants).sort((a, b) => b[1] - a[1])[0][0];
+        const count = Object.values(variants).reduce((s, c) => s + c, 0);
+        buckets[nk] = { label, count };
+      });
+      return buckets;
+    }
+
+    /* Builds the pick-list for the Add/Edit dropdowns: a few sensible
+       defaults (in local spelling) plus whatever's already in the data
+       (case-deduped), so a new city/language typed once becomes a real,
+       reusable option for everyone from then on — no separate settings
+       screen needed. */
+    function buildOptionList(seedList, allRows, key, fallback) {
+      const buckets = countByNormalized(allRows, key, fallback);
+      const map = new Map();
+      seedList.forEach((s) => map.set(s.toLowerCase(), s));
+      Object.values(buckets).forEach(({ label }) => {
+        if (label === fallback) return;
+        const k = label.toLowerCase();
+        if (!map.has(k)) map.set(k, label);
+      });
+      return [...map.values()].sort((a, b) => a.localeCompare(b));
     }
 
     function applyLightFilters(list) {
@@ -156,16 +191,16 @@
     }
 
     function renderCityTabs(all) {
-      const counts = countBy(all, 'city', 'No city set');
-      const cities = Object.keys(counts).sort();
-      if (activeCity && !cities.includes(activeCity)) activeCity = null;
-      const tabs = ['', ...cities];
+      const buckets = countByNormalized(all, 'city', 'No city set');
+      const keys = Object.keys(buckets).sort((a, b) => buckets[a].label.localeCompare(buckets[b].label));
+      if (activeCity && !keys.includes(activeCity)) activeCity = null;
+      const tabs = ['', ...keys];
       return `<div class="tabs" style="margin:10px 0 0;">
-        ${tabs.map((c) => {
-          const isAll = c === '';
-          const label = isAll ? `All cities <span class="muted small">(${all.length})</span>` : `${escapeHtml(c)} <span class="muted small">(${counts[c]})</span>`;
-          const isActive = isAll ? !activeCity : c === activeCity;
-          return `<button class="${isActive ? 'active' : ''}" data-city="${escapeHtml(c)}" onclick="setCityTab(this.dataset.city)">${label}</button>`;
+        ${tabs.map((k) => {
+          const isAll = k === '';
+          const label = isAll ? `All cities <span class="muted small">(${all.length})</span>` : `${escapeHtml(buckets[k].label)} <span class="muted small">(${buckets[k].count})</span>`;
+          const isActive = isAll ? !activeCity : k === activeCity;
+          return `<button class="${isActive ? 'active' : ''}" data-city="${escapeHtml(k)}" onclick="setCityTab(this.dataset.city)">${label}</button>`;
         }).join('')}
       </div>`;
     }
@@ -224,23 +259,23 @@
     }
 
     function renderTabbedView(all) {
-      const cityScoped = activeCity ? all.filter((b) => ((b.city || '').trim() || 'No city set') === activeCity) : all;
-      const langCounts = countBy(cityScoped, 'languageGroup', 'No language group set');
-      const langs = Object.keys(langCounts).sort();
-      if (activeLang && !langs.includes(activeLang)) activeLang = null;
-      const langTabs = ['', ...langs];
+      const cityScoped = activeCity ? all.filter((b) => groupKey(b.city, 'No city set') === activeCity) : all;
+      const langBuckets = countByNormalized(cityScoped, 'languageGroup', 'No language group set');
+      const langKeys = Object.keys(langBuckets).sort((a, b) => langBuckets[a].label.localeCompare(langBuckets[b].label));
+      if (activeLang && !langKeys.includes(activeLang)) activeLang = null;
+      const langTabs = ['', ...langKeys];
 
-      const langScoped = activeLang ? cityScoped.filter((b) => ((b.languageGroup || '').trim() || 'No language group set') === activeLang) : cityScoped;
+      const langScoped = activeLang ? cityScoped.filter((b) => groupKey(b.languageGroup, 'No language group set') === activeLang) : cityScoped;
       const rows = applyLightFilters(langScoped);
 
       return `
         <div class="card" style="margin-bottom:0;">
           ${langTabs.length > 1 ? `<div class="tabs" style="margin-bottom:12px;">
-            ${langTabs.map((l) => {
-              const isAll = l === '';
-              const label = isAll ? `All languages <span class="muted small">(${cityScoped.length})</span>` : `${escapeHtml(l)} <span class="muted small">(${langCounts[l]})</span>`;
-              const isActive = isAll ? !activeLang : l === activeLang;
-              return `<button class="${isActive ? 'active' : ''}" data-lang="${escapeHtml(l)}" onclick="setLangTab(this.dataset.lang)">${label}</button>`;
+            ${langTabs.map((k) => {
+              const isAll = k === '';
+              const label = isAll ? `All languages <span class="muted small">(${cityScoped.length})</span>` : `${escapeHtml(langBuckets[k].label)} <span class="muted small">(${langBuckets[k].count})</span>`;
+              const isActive = isAll ? !activeLang : k === activeLang;
+              return `<button class="${isActive ? 'active' : ''}" data-lang="${escapeHtml(k)}" onclick="setLangTab(this.dataset.lang)">${label}</button>`;
             }).join('')}
           </div>` : ''}
           ${renderQuickFilters()}
@@ -326,6 +361,10 @@
       const b = id ? db.bloggerDirectory.find((x) => x.id === id) : null;
       const storedOrigin = b ? (b.audienceCountries || [])[0] || null : null;
       const isCustomOrigin = storedOrigin && !KNOWN_ORIGIN_CODES.includes(storedOrigin);
+      const cityOptions = buildOptionList(CITY_SUGGESTIONS, db.bloggerDirectory, 'city', 'No city set');
+      const langOptions = buildOptionList(LANGUAGE_SUGGESTIONS, db.bloggerDirectory, 'languageGroup', 'No language group set');
+      const cityIsCustom = b && b.city && !cityOptions.some((c) => c.toLowerCase() === b.city.trim().toLowerCase());
+      const langIsCustom = b && b.languageGroup && !langOptions.some((c) => c.toLowerCase() === b.languageGroup.trim().toLowerCase());
       document.getElementById('modal-root').innerHTML = `
         <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
           <div class="modal">
@@ -347,11 +386,27 @@
             <label>Audience notes</label>
             <textarea id="b-audience" placeholder="Who follows them, demographics, spending power…">${b ? escapeHtml(b.audienceNotes || '') : ''}</textarea>
             <div class="grid grid-2">
-              <div><label>City</label><input id="b-city" value="${b ? escapeHtml(b.city || '') : ''}" /></div>
+              <div>
+                <label>City <span class="field-hint" style="display:inline;">(pick from the list so casing always matches — "Prague" and "prague" would otherwise split into two groups)</span></label>
+                <select id="b-city-select" onchange="onNewOptionToggle('city', this.value)">
+                  <option value="">— Select city —</option>
+                  ${cityOptions.map((c) => `<option value="${escapeHtml(c)}" ${b && b.city && b.city.trim().toLowerCase() === c.toLowerCase() ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+                  <option value="__new__" ${cityIsCustom ? 'selected' : ''}>+ Add new city…</option>
+                </select>
+                <div id="b-city-new-wrap" style="display:${cityIsCustom ? 'block' : 'none'};margin-top:8px;">
+                  <input id="b-city-new" placeholder="Type new city name…" value="${cityIsCustom ? escapeHtml(b.city) : ''}" />
+                </div>
+              </div>
               <div>
                 <label>Language group</label>
-                <input id="b-lang" list="lang-suggestions" value="${b ? escapeHtml(b.languageGroup || '') : ''}" placeholder="Русский / Čeština / English…" />
-                <datalist id="lang-suggestions">${LANGUAGE_SUGGESTIONS.map((l) => `<option value="${l}">`).join('')}</datalist>
+                <select id="b-lang-select" onchange="onNewOptionToggle('lang', this.value)">
+                  <option value="">— Select language —</option>
+                  ${langOptions.map((l) => `<option value="${escapeHtml(l)}" ${b && b.languageGroup && b.languageGroup.trim().toLowerCase() === l.toLowerCase() ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
+                  <option value="__new__" ${langIsCustom ? 'selected' : ''}>+ Add new language…</option>
+                </select>
+                <div id="b-lang-new-wrap" style="display:${langIsCustom ? 'block' : 'none'};margin-top:8px;">
+                  <input id="b-lang-new" placeholder="Type new language group…" value="${langIsCustom ? escapeHtml(b.languageGroup) : ''}" />
+                </div>
               </div>
             </div>
             <label>Nationality <span class="field-hint" style="display:inline;">(who the blogger themself is — not their audience; click again to clear)</span></label>
@@ -409,6 +464,12 @@
       if (!wasSelected) el.classList.add('selected');
     }
 
+    /* Shows the free-text box when "+ Add new city/language…" is picked. */
+    function onNewOptionToggle(kind, value) {
+      const wrap = document.getElementById(`b-${kind}-new-wrap`);
+      if (wrap) wrap.style.display = value === '__new__' ? 'block' : 'none';
+    }
+
     function readBloggerForm() {
       const originEl = document.querySelector('#audience-chips .chip.selected');
       let audienceCountries = [];
@@ -421,6 +482,10 @@
         }
       }
       const genderEl = document.querySelector('#gender-chips .chip.selected');
+      const citySelect = document.getElementById('b-city-select').value;
+      const city = citySelect === '__new__' ? document.getElementById('b-city-new').value.trim() : citySelect;
+      const langSelect = document.getElementById('b-lang-select').value;
+      const languageGroup = langSelect === '__new__' ? document.getElementById('b-lang-new').value.trim() : langSelect;
       return {
         profileName: document.getElementById('b-name').value.trim(),
         instagramUrl: document.getElementById('b-instagram').value.trim(),
@@ -430,8 +495,8 @@
         engagementRate: document.getElementById('b-er').value ? Number(document.getElementById('b-er').value) : null,
         avgReach90d: document.getElementById('b-reach').value ? Number(document.getElementById('b-reach').value) : null,
         audienceNotes: document.getElementById('b-audience').value.trim(),
-        city: document.getElementById('b-city').value.trim(),
-        languageGroup: document.getElementById('b-lang').value.trim(),
+        city,
+        languageGroup,
         audienceCountries,
         gender: genderEl ? genderEl.dataset.gender : null,
         collabType: document.getElementById('b-collabtype').value,
@@ -573,6 +638,17 @@
 
       if (newRows.length === 0) { toast('No valid rows found.'); return; }
       await reload();
+
+      /* Snap city/language casing to whatever's already canonical in the
+         database (or the seed list), so a bulk CSV import doesn't spawn
+         its own "Prague" vs "prague" duplicate the way manual typing did. */
+      const cityCanon = buildOptionList(CITY_SUGGESTIONS, db.bloggerDirectory, 'city', 'No city set');
+      const langCanon = buildOptionList(LANGUAGE_SUGGESTIONS, db.bloggerDirectory, 'languageGroup', 'No language group set');
+      newRows.forEach((r) => {
+        if (r.city) { const m = cityCanon.find((c) => c.toLowerCase() === r.city.toLowerCase()); if (m) r.city = m; }
+        if (r.languageGroup) { const m = langCanon.find((c) => c.toLowerCase() === r.languageGroup.toLowerCase()); if (m) r.languageGroup = m; }
+      });
+
       const inserted = await dbInsertMany('bloggerDirectory', newRows);
       db.bloggerDirectory.push(...inserted);
       await logActivity(db, { userId: user.id, entityType: 'blogger_directory', entityId: null, action: `Imported ${inserted.length} bloggers from CSV` });
