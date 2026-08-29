@@ -399,7 +399,7 @@
             <button class="modal-close" onclick="closeModal()">×</button>
             <h2>${b ? 'Edit blogger' : 'Add blogger'}</h2>
             <label>Profile name</label>
-            <input id="b-name" value="${b ? escapeHtml(b.profileName) : ''}" required />
+            <input id="b-name" value="${b ? escapeHtml(b.profileName) : ''}" placeholder="Can be filled in later" />
             <div class="grid grid-2">
               <div><label>Instagram URL</label><input id="b-instagram" value="${b ? escapeHtml(b.instagramUrl || '') : ''}" placeholder="https://instagram.com/…" /></div>
               <div><label>TikTok URL</label><input id="b-tiktok" value="${b ? escapeHtml(b.tiktokUrl || '') : ''}" placeholder="https://tiktok.com/@…" /></div>
@@ -617,17 +617,31 @@
 
     async function submitBlogger(id) {
       const fields = readBloggerForm();
-      if (!fields.profileName) { toast('Profile name is required.'); return; }
-      await reload();
-      if (id) {
-        const updated = await dbUpdate('bloggerDirectory', id, fields);
-        const idx = db.bloggerDirectory.findIndex((x) => x.id === id);
-        if (idx >= 0) db.bloggerDirectory[idx] = updated;
-        toast('Blogger updated.');
-      } else {
-        const row = await dbInsert('bloggerDirectory', { ...fields, statsUpdatedAt: null, createdAt: nowISO() });
-        db.bloggerDirectory.push(row);
-        toast('Blogger added.');
+      /* No field is mandatory anymore — you can save a near-blank row and
+         fill in the rest later. A totally nameless row would be impossible
+         to find again, so it gets a placeholder name instead of being
+         blocked. */
+      if (!fields.profileName) fields.profileName = 'Untitled blogger';
+      try {
+        await reload();
+        if (id) {
+          const updated = await dbUpdate('bloggerDirectory', id, fields);
+          const idx = db.bloggerDirectory.findIndex((x) => x.id === id);
+          if (idx >= 0) db.bloggerDirectory[idx] = updated;
+          toast('Blogger updated.');
+        } else {
+          const row = await dbInsert('bloggerDirectory', { ...fields, statsUpdatedAt: null, createdAt: nowISO() });
+          db.bloggerDirectory.push(row);
+          toast('Blogger added.');
+        }
+      } catch (err) {
+        /* Previously a failed save here just did nothing visible — the
+           promise rejected and the error vanished into the console, which
+           looked exactly like the button not working at all. Now it's
+           surfaced so the real cause is obvious. */
+        console.error('submitBlogger failed:', err);
+        toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
+        return;
       }
       closeModal();
       render();
