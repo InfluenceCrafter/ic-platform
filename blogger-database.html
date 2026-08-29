@@ -366,7 +366,10 @@
             <td>${b.followersCount != null ? Number(b.followersCount).toLocaleString() : '—'}</td>
             <td>${b.engagementRate != null ? b.engagementRate + '%' : '—'}</td>
             <td>${b.avgReach90d != null ? Number(b.avgReach90d).toLocaleString() : '—'}</td>
-            <td>${escapeHtml(COLLAB_TYPE_LABELS[b.collabType] || b.collabType)}</td>
+            <td>
+              ${escapeHtml(COLLAB_TYPE_LABELS[b.collabType] || b.collabType)}
+              ${(b.reelPrice != null || b.storyPrice != null) ? `<div class="small muted" style="white-space:nowrap;">${b.reelPrice != null ? `Reel ${Number(b.reelPrice).toLocaleString()}` : ''}${b.reelPrice != null && b.storyPrice != null ? ' · ' : ''}${b.storyPrice != null ? `Story ${Number(b.storyPrice).toLocaleString()}` : ''}</div>` : ''}
+            </td>
             <td><span class="badge ${bloggerStatusBadgeClass(b.status)}">${escapeHtml(STATUS_LABELS_LOCAL[b.status] || b.status)}</span></td>
             <td>
               <span class="badge ${fresh.cls}">${fresh.label}</span><br/>
@@ -473,7 +476,7 @@
             <div class="grid grid-2">
               <div>
                 <label>Collaboration type</label>
-                <select id="b-collabtype">
+                <select id="b-collabtype" onchange="toggleRatesVisibility(this.value)">
                   ${Object.entries(COLLAB_TYPE_LABELS).map(([k, v]) => `<option value="${k}" ${b && b.collabType === k ? 'selected' : ''}>${v}</option>`).join('')}
                 </select>
               </div>
@@ -482,6 +485,12 @@
                 <select id="b-status">
                   ${Object.entries(STATUS_LABELS_LOCAL).map(([k, v]) => `<option value="${k}" ${(b ? b.status : 'active') === k ? 'selected' : ''}>${v}</option>`).join('')}
                 </select>
+              </div>
+            </div>
+            <div id="b-rates-wrap" style="display:${b && (b.collabType === 'paid' || b.collabType === 'both') ? 'block' : 'none'};">
+              <div class="grid grid-2">
+                <div><label>Reel price</label><input id="b-reel-price" type="number" min="0" step="0.01" placeholder="e.g. 3000" value="${b && b.reelPrice != null ? b.reelPrice : ''}" /></div>
+                <div><label>Story price</label><input id="b-story-price" type="number" min="0" step="0.01" placeholder="e.g. 1000" value="${b && b.storyPrice != null ? b.storyPrice : ''}" /></div>
               </div>
             </div>
             <label>Terms / notes</label>
@@ -557,6 +566,13 @@
       if (wrap) wrap.style.display = value === '__new__' ? 'block' : 'none';
     }
 
+    /* Reel/story rates only make sense once money is involved — hidden for
+       pure barter, shown for "paid" and "barter or paid". */
+    function toggleRatesVisibility(collabType) {
+      const wrap = document.getElementById('b-rates-wrap');
+      if (wrap) wrap.style.display = (collabType === 'paid' || collabType === 'both') ? 'block' : 'none';
+    }
+
     function readBloggerForm() {
       const originEl = document.querySelector('#audience-chips .chip.selected');
       let audienceCountries = [];
@@ -613,6 +629,8 @@
         audienceStats,
         gender: genderEl ? genderEl.dataset.gender : null,
         collabType: document.getElementById('b-collabtype').value,
+        reelPrice: document.getElementById('b-reel-price').value !== '' ? Number(document.getElementById('b-reel-price').value) : null,
+        storyPrice: document.getElementById('b-story-price').value !== '' ? Number(document.getElementById('b-story-price').value) : null,
         status: document.getElementById('b-status').value,
         termsNotes: document.getElementById('b-terms').value.trim(),
       };
@@ -662,6 +680,8 @@
       audienceCountries: ['origin', 'nationality', 'bloggerorigin', 'ru/ua', 'ruua', 'национальность', 'происхождение', 'страна'],
       gender: ['gender', 'sex', 'пол'],
       collabType: ['collabtype', 'type', 'бартер/оплата', 'collab'],
+      reelPrice: ['reelprice', 'reel', 'reelrate', 'цена рилс', 'рилс'],
+      storyPrice: ['storyprice', 'story', 'storyrate', 'цена сторис', 'сторис'],
       termsNotes: ['termsnotes', 'terms', 'notes', 'условия', 'заметки'],
       status: ['status', 'статус'],
     };
@@ -714,7 +734,7 @@
           <div class="modal">
             <button class="modal-close" onclick="closeModal()">×</button>
             <h2>Import from Excel / CSV</h2>
-            <p class="small muted">Copy the rows from your Excel sheet (including the header row) and paste them below — comma or tab separated both work. Recognized columns: profile name, Instagram, TikTok, email, followers, ER, avg reach, audience notes, city, language group, nationality (RU/UA/CZ/SK/EN or free text — the blogger themself, not their audience), gender (male/female), collab type (barter/paid/both), terms/notes, status.</p>
+            <p class="small muted">Copy the rows from your Excel sheet (including the header row) and paste them below — comma or tab separated both work. Recognized columns: profile name, Instagram, TikTok, email, followers, ER, avg reach, audience notes, city, language group, nationality (RU/UA/CZ/SK/EN or free text — the blogger themself, not their audience), gender (male/female), collab type (barter/paid/both), reel price, story price, terms/notes, status.</p>
             <textarea id="csv-input" rows="10" placeholder="Name, Instagram, City, Language...&#10;Anna K., https://instagram.com/annak, Prague, Русский..."></textarea>
             <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitImportCSV()">Import rows</button>
           </div>
@@ -737,7 +757,7 @@
         const obj = { collabType: 'barter', status: 'active', statsUpdatedAt: null, createdAt: nowISO() };
         colMap.forEach((field, i) => {
           if (!field || cells[i] === undefined || cells[i] === '') return;
-          if (['followersCount', 'avgReach90d'].includes(field)) obj[field] = Number(cells[i].replace(/[^\d.-]/g, '')) || null;
+          if (['followersCount', 'avgReach90d', 'reelPrice', 'storyPrice'].includes(field)) obj[field] = Number(cells[i].replace(/[^\d.-]/g, '')) || null;
           else if (field === 'engagementRate') obj[field] = Number(cells[i].replace(/[^\d.-]/g, '')) || null;
           else if (field === 'audienceCountries') {
             const first = cells[i].split(/[/,;]+/).map((s) => s.trim()).filter(Boolean)[0];
@@ -773,10 +793,10 @@
     /* ---------------- CSV export ---------------- */
     function exportCSV() {
       const rows = applyLightFilters(db.bloggerDirectory);
-      const header = ['Profile name', 'Instagram', 'TikTok', 'Email', 'Followers', 'ER (%)', 'Avg reach (90d)', 'Audience notes', 'City', 'Language group', 'Nationality', 'Gender', 'Collab type', 'Status', 'Terms / notes'];
+      const header = ['Profile name', 'Instagram', 'TikTok', 'Email', 'Followers', 'ER (%)', 'Avg reach (90d)', 'Audience notes', 'City', 'Language group', 'Nationality', 'Gender', 'Collab type', 'Reel price', 'Story price', 'Status', 'Terms / notes'];
       const body = rows.map((b) => [
         b.profileName, b.instagramUrl, b.tiktokUrl, b.email, b.followersCount, b.engagementRate, b.avgReach90d,
-        b.audienceNotes, b.city, b.languageGroup, (b.audienceCountries || []).join('/'), b.gender || '', COLLAB_TYPE_LABELS[b.collabType] || b.collabType, STATUS_LABELS_LOCAL[b.status] || b.status, b.termsNotes,
+        b.audienceNotes, b.city, b.languageGroup, (b.audienceCountries || []).join('/'), b.gender || '', COLLAB_TYPE_LABELS[b.collabType] || b.collabType, b.reelPrice != null ? b.reelPrice : '', b.storyPrice != null ? b.storyPrice : '', STATUS_LABELS_LOCAL[b.status] || b.status, b.termsNotes,
       ]);
       const csv = [header, ...body].map((r) => r.map((v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`).join(',')).join('\n');
       const blob = new Blob([csv], { type: 'text/csv' });

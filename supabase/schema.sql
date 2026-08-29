@@ -220,6 +220,8 @@ create table if not exists blogger_directory (
   audience_countries text[] default '{}',
   gender text check (gender in ('male', 'female', 'other')),
   collab_type text not null default 'barter' check (collab_type in ('barter', 'paid', 'both')),
+  reel_price numeric(10,2),
+  story_price numeric(10,2),
   terms_notes text,
   status text not null default 'active' check (status in ('active', 'contacted', 'archived')),
   stats_updated_at timestamptz,
