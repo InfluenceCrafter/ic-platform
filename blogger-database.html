@@ -24,7 +24,6 @@
        through every group at once — click a tab, see just that slice). */
     let filters = { search: '', collabType: '', status: '' };
     let activeCity = null; // null = "All cities"
-    let activeLang = null; // null = "All languages" (scoped to activeCity)
     let originFilter = []; // quick nationality pills, OR-filter within current tab
     let genderFilter = []; // quick gender pills, OR-filter within current tab
 
@@ -248,8 +247,7 @@
       </div>`;
     }
 
-    function setCityTab(city) { activeCity = city || null; activeLang = null; render(); }
-    function setLangTab(lang) { activeLang = lang || null; render(); }
+    function setCityTab(city) { activeCity = city || null; render(); }
 
     function onSearchChange(value) { filters.search = value; render(); }
     function onFilterChange(key, value) { filters[key] = value; render(); }
@@ -303,24 +301,10 @@
 
     function renderTabbedView(all) {
       const cityScoped = activeCity ? all.filter((b) => groupKey(b.city, 'No city set') === activeCity) : all;
-      const langBuckets = countByNormalized(cityScoped, 'languageGroup', 'No language group set');
-      const langKeys = Object.keys(langBuckets).sort((a, b) => langBuckets[a].label.localeCompare(langBuckets[b].label));
-      if (activeLang && !langKeys.includes(activeLang)) activeLang = null;
-      const langTabs = ['', ...langKeys];
-
-      const langScoped = activeLang ? cityScoped.filter((b) => groupKey(b.languageGroup, 'No language group set') === activeLang) : cityScoped;
-      const rows = applyLightFilters(langScoped);
+      const rows = applyLightFilters(cityScoped);
 
       return `
         <div class="card" style="margin-bottom:0;">
-          ${langTabs.length > 1 ? `<div class="tabs" style="margin-bottom:12px;">
-            ${langTabs.map((k) => {
-              const isAll = k === '';
-              const label = isAll ? `All languages <span class="muted small">(${cityScoped.length})</span>` : `${escapeHtml(langBuckets[k].label)} <span class="muted small">(${langBuckets[k].count})</span>`;
-              const isActive = isAll ? !activeLang : k === activeLang;
-              return `<button class="${isActive ? 'active' : ''}" data-lang="${escapeHtml(k)}" onclick="setLangTab(this.dataset.lang)">${label}</button>`;
-            }).join('')}
-          </div>` : ''}
           ${renderQuickFilters()}
           ${rows.length === 0
             ? `<div class="empty-state"><p>No bloggers match this view yet.</p><button class="btn btn-primary btn-sm" onclick="openBloggerModal()">+ Add blogger</button></div>`
