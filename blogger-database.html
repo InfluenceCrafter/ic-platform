@@ -18,7 +18,7 @@
   <script src="js/ui.js"></script>
   <script>
     let db, user;
-    let filters = { search: '', city: '', languageGroup: '', collabType: '', status: '' };
+    let filters = { search: '', city: '', languageGroup: '', audienceCountry: '', collabType: '', status: '' };
 
     (async function () {
       const ctx = await requireRole(['admin']);
@@ -30,6 +30,10 @@
     const COLLAB_TYPE_LABELS = { barter: 'Barter', paid: 'Paid', both: 'Barter or paid' };
     const STATUS_LABELS_LOCAL = { active: 'Active', contacted: 'Contacted', archived: 'Archived' };
     const LANGUAGE_SUGGESTIONS = ['Čeština', 'Русский', 'English', 'Slovenčina'];
+    /* Language ("Русский") and audience country are tracked separately —
+       a Russian-speaking creator's audience can be RU, UA, or both, and
+       lumping that into one "Русский" tag loses that distinction. */
+    const AUDIENCE_COUNTRIES = ['RU', 'UA', 'Other'];
 
     function bloggerStatusBadgeClass(status) {
       if (status === 'active') return 'badge-positive';
@@ -64,6 +68,7 @@
       return db.bloggerDirectory.filter((b) => {
         if (filters.city && (b.city || '') !== filters.city) return false;
         if (filters.languageGroup && (b.languageGroup || '') !== filters.languageGroup) return false;
+        if (filters.audienceCountry && !(b.audienceCountries || []).includes(filters.audienceCountry)) return false;
         if (filters.collabType && b.collabType !== filters.collabType) return false;
         if (filters.status && b.status !== filters.status) return false;
         if (q) {
@@ -116,6 +121,13 @@
           </div>
           <div class="grid grid-3" style="margin-top:10px;">
             <div>
+              <label>Audience country</label>
+              <select onchange="onFilterChange('audienceCountry', this.value)">
+                <option value="">All audiences</option>
+                ${AUDIENCE_COUNTRIES.map((c) => `<option value="${c}" ${filters.audienceCountry === c ? 'selected' : ''}>${c}</option>`).join('')}
+              </select>
+            </div>
+            <div>
               <label>Collaboration type</label>
               <select onchange="onFilterChange('collabType', this.value)">
                 <option value="">All types</option>
@@ -129,9 +141,9 @@
                 ${Object.entries(STATUS_LABELS_LOCAL).map(([k, v]) => `<option value="${k}" ${filters.status === k ? 'selected' : ''}>${v}</option>`).join('')}
               </select>
             </div>
-            <div style="display:flex;align-items:flex-end;">
-              <button class="btn btn-ghost btn-sm" onclick="clearFilters()">Clear filters</button>
-            </div>
+          </div>
+          <div style="margin-top:10px;">
+            <button class="btn btn-ghost btn-sm" onclick="clearFilters()">Clear filters</button>
           </div>
         </div>
 
@@ -152,7 +164,7 @@
     }
 
     function clearFilters() {
-      filters = { search: '', city: '', languageGroup: '', collabType: '', status: '' };
+      filters = { search: '', city: '', languageGroup: '', audienceCountry: '', collabType: '', status: '' };
       render();
     }
 
@@ -181,7 +193,7 @@
     function bloggerTable(list) {
       const sorted = [...list].sort((a, b) => statsFreshness(b.statsUpdatedAt).days - statsFreshness(a.statsUpdatedAt).days);
       return `<div class="table-wrap"><table>
-        <tr><th>Profile</th><th>Email</th><th>Followers</th><th>ER</th><th>Avg reach (90d)</th><th>Type</th><th>Status</th><th>Data freshness</th><th>Terms / notes</th><th></th></tr>
+        <tr><th>Profile</th><th>Email</th><th>Audience</th><th>Followers</th><th>ER</th><th>Avg reach (90d)</th><th>Type</th><th>Status</th><th>Data freshness</th><th>Terms / notes</th><th></th></tr>
         ${sorted.map((b) => {
           const fresh = statsFreshness(b.statsUpdatedAt);
           return `
@@ -195,6 +207,7 @@
               </div>
             </td>
             <td class="small">${escapeHtml(b.email || '—')}</td>
+            <td>${(b.audienceCountries || []).length ? b.audienceCountries.map((c) => `<span class="badge badge-neutral" style="margin:1px;">${escapeHtml(c)}</span>`).join('') : '<span class="muted small">—</span>'}</td>
             <td>${b.followersCount != null ? Number(b.followersCount).toLocaleString() : '—'}</td>
             <td>${b.engagementRate != null ? b.engagementRate + '%' : '—'}</td>
             <td>${b.avgReach90d != null ? Number(b.avgReach90d).toLocaleString() : '—'}</td>
@@ -246,6 +259,10 @@
                 <datalist id="lang-suggestions">${LANGUAGE_SUGGESTIONS.map((l) => `<option value="${l}">`).join('')}</datalist>
               </div>
             </div>
+            <label>Audience country <span class="field-hint" style="display:inline;">(who actually follows them — can be more than one)</span></label>
+            <div class="chip-select" id="audience-chips">
+              ${AUDIENCE_COUNTRIES.map((c) => `<div class="chip ${b && (b.audienceCountries || []).includes(c) ? 'selected' : ''}" data-country="${c}" onclick="toggleChip(this)">${c}</div>`).join('')}
+            </div>
             <div class="grid grid-2">
               <div>
                 <label>Collaboration type</label>
@@ -267,6 +284,8 @@
         </div>`;
     }
 
+    function toggleChip(el) { el.classList.toggle('selected'); }
+
     function readBloggerForm() {
       return {
         profileName: document.getElementById('b-name').value.trim(),
@@ -279,6 +298,7 @@
         audienceNotes: document.getElementById('b-audience').value.trim(),
         city: document.getElementById('b-city').value.trim(),
         languageGroup: document.getElementById('b-lang').value.trim(),
+        audienceCountries: [...document.querySelectorAll('#audience-chips .chip.selected')].map((el) => el.dataset.country),
         collabType: document.getElementById('b-collabtype').value,
         status: document.getElementById('b-status').value,
         termsNotes: document.getElementById('b-terms').value.trim(),
@@ -326,6 +346,7 @@
       audienceNotes: ['audiencenotes', 'audience', 'аудитория'],
       city: ['city', 'город'],
       languageGroup: ['languagegroup', 'language', 'язык'],
+      audienceCountries: ['audiencecountry', 'audiencecountries', 'country', 'countries', 'ru/ua', 'страна', 'страны', 'страна аудитории'],
       collabType: ['collabtype', 'type', 'бартер/оплата', 'collab'],
       termsNotes: ['termsnotes', 'terms', 'notes', 'условия', 'заметки'],
       status: ['status', 'статус'],
@@ -358,7 +379,7 @@
           <div class="modal">
             <button class="modal-close" onclick="closeModal()">×</button>
             <h2>Import from Excel / CSV</h2>
-            <p class="small muted">Copy the rows from your Excel sheet (including the header row) and paste them below — comma or tab separated both work. Recognized columns: profile name, Instagram, TikTok, email, followers, ER, avg reach, audience notes, city, language group, collab type (barter/paid/both), terms/notes, status.</p>
+            <p class="small muted">Copy the rows from your Excel sheet (including the header row) and paste them below — comma or tab separated both work. Recognized columns: profile name, Instagram, TikTok, email, followers, ER, avg reach, audience notes, city, language group, audience country (RU/UA, can combine like "RU/UA"), collab type (barter/paid/both), terms/notes, status.</p>
             <textarea id="csv-input" rows="10" placeholder="Name, Instagram, City, Language...&#10;Anna K., https://instagram.com/annak, Prague, Русский..."></textarea>
             <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitImportCSV()">Import rows</button>
           </div>
@@ -383,6 +404,10 @@
           if (!field || cells[i] === undefined || cells[i] === '') return;
           if (['followersCount', 'avgReach90d'].includes(field)) obj[field] = Number(cells[i].replace(/[^\d.-]/g, '')) || null;
           else if (field === 'engagementRate') obj[field] = Number(cells[i].replace(/[^\d.-]/g, '')) || null;
+          else if (field === 'audienceCountries') {
+            obj[field] = cells[i].split(/[/,;]+/).map((s) => s.trim().toUpperCase()).filter(Boolean)
+              .map((s) => (s === 'RU' || s === 'UA') ? s : 'Other');
+          }
           else obj[field] = cells[i];
         });
         return obj;
@@ -401,10 +426,10 @@
     /* ---------------- CSV export ---------------- */
     function exportCSV() {
       const rows = filteredRows();
-      const header = ['Profile name', 'Instagram', 'TikTok', 'Email', 'Followers', 'ER (%)', 'Avg reach (90d)', 'Audience notes', 'City', 'Language group', 'Collab type', 'Status', 'Terms / notes'];
+      const header = ['Profile name', 'Instagram', 'TikTok', 'Email', 'Followers', 'ER (%)', 'Avg reach (90d)', 'Audience notes', 'City', 'Language group', 'Audience country', 'Collab type', 'Status', 'Terms / notes'];
       const body = rows.map((b) => [
         b.profileName, b.instagramUrl, b.tiktokUrl, b.email, b.followersCount, b.engagementRate, b.avgReach90d,
-        b.audienceNotes, b.city, b.languageGroup, COLLAB_TYPE_LABELS[b.collabType] || b.collabType, STATUS_LABELS_LOCAL[b.status] || b.status, b.termsNotes,
+        b.audienceNotes, b.city, b.languageGroup, (b.audienceCountries || []).join('/'), COLLAB_TYPE_LABELS[b.collabType] || b.collabType, STATUS_LABELS_LOCAL[b.status] || b.status, b.termsNotes,
       ]);
       const csv = [header, ...body].map((r) => r.map((v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`).join(',')).join('\n');
       const blob = new Blob([csv], { type: 'text/csv' });
