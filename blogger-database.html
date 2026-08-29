@@ -331,7 +331,7 @@
     }
 
     function bloggerTable(list) {
-      const sorted = [...list].sort((a, b) => statsFreshness(b.statsUpdatedAt).days - statsFreshness(a.statsUpdatedAt).days);
+      const sorted = [...list].sort((a, b) => (a.profileName || '').localeCompare(b.profileName || '', undefined, { sensitivity: 'base' }));
       return `<div class="table-scroll"><table>
         <thead><tr><th>Profile</th><th>Email</th><th>Tags</th><th>Audience</th><th>Followers</th><th>ER</th><th>Avg reach</th><th>Type</th><th>Status</th><th>Freshness</th><th>Terms / notes</th><th></th></tr></thead>
         <tbody>
