@@ -66,7 +66,7 @@ const TABLES = {
   },
   bloggerDirectory: {
     table: 'blogger_directory',
-    map: { id: 'id', profileName: 'profile_name', instagramUrl: 'instagram_url', tiktokUrl: 'tiktok_url', email: 'email', followersCount: 'followers_count', engagementRate: 'engagement_rate', avgReach90d: 'avg_reach_90d', audienceNotes: 'audience_notes', city: 'city', languageGroup: 'language_group', audienceCountries: 'audience_countries', collabType: 'collab_type', termsNotes: 'terms_notes', status: 'status', statsUpdatedAt: 'stats_updated_at', createdAt: 'created_at' },
+    map: { id: 'id', profileName: 'profile_name', instagramUrl: 'instagram_url', tiktokUrl: 'tiktok_url', email: 'email', followersCount: 'followers_count', engagementRate: 'engagement_rate', avgReach90d: 'avg_reach_90d', audienceNotes: 'audience_notes', city: 'city', languageGroup: 'language_group', audienceCountries: 'audience_countries', gender: 'gender', collabType: 'collab_type', termsNotes: 'terms_notes', status: 'status', statsUpdatedAt: 'stats_updated_at', createdAt: 'created_at' },
   },
 };
 

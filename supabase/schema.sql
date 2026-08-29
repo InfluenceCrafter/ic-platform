@@ -217,6 +217,7 @@ create table if not exists blogger_directory (
   city text,
   language_group text,
   audience_countries text[] default '{}',
+  gender text check (gender in ('male', 'female', 'other')),
   collab_type text not null default 'barter' check (collab_type in ('barter', 'paid', 'both')),
   terms_notes text,
   status text not null default 'active' check (status in ('active', 'contacted', 'archived')),

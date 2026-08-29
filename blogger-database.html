@@ -25,7 +25,8 @@
     let filters = { search: '', collabType: '', status: '' };
     let activeCity = null; // null = "All cities"
     let activeLang = null; // null = "All languages" (scoped to activeCity)
-    let originFilter = []; // quick RU/UA/Other pills, OR-filter within current tab
+    let originFilter = []; // quick nationality pills, OR-filter within current tab
+    let genderFilter = []; // quick gender pills, OR-filter within current tab
 
     (async function () {
       const ctx = await requireRole(['admin']);
@@ -37,14 +38,34 @@
     const COLLAB_TYPE_LABELS = { barter: 'Barter', paid: 'Paid', both: 'Barter or paid' };
     const STATUS_LABELS_LOCAL = { active: 'Active', contacted: 'Contacted', archived: 'Archived' };
     const LANGUAGE_SUGGESTIONS = ['Čeština', 'Русский', 'English', 'Slovenčina'];
-    /* This describes the blogger themself — are they a Russian or Ukrainian
-       creator? — not their audience. It's a single choice ("either/or"),
-       shown as a small flag badge everywhere. */
-    const ORIGIN_OPTIONS = ['RU', 'UA', 'Other'];
+    /* This describes the blogger themself (nationality / market they belong
+       to) — not their audience. It's a single choice ("either/or"). The five
+       common markets are one-click chips; anything else (Polish, German,
+       Vietnamese expat bloggers, etc.) goes through "Other" as free text so
+       the list never needs a code change to stay accurate. */
+    const KNOWN_ORIGIN_CODES = ['RU', 'UA', 'CZ', 'SK', 'EN'];
+    const ORIGIN_OPTIONS = [...KNOWN_ORIGIN_CODES, 'OTHER'];
+    const ORIGIN_META = {
+      RU: { flag: '🇷🇺', label: 'Russian', color: '#1d4ed8', bg: '#eff6ff' },
+      UA: { flag: '🇺🇦', label: 'Ukrainian', color: '#a16207', bg: '#fefce8' },
+      CZ: { flag: '🇨🇿', label: 'Czech', color: '#b91c1c', bg: '#fef2f2' },
+      SK: { flag: '🇸🇰', label: 'Slovak', color: '#7c3aed', bg: '#f5f3ff' },
+      EN: { flag: '🌍', label: 'English-speaking', color: '#15803d', bg: '#ecfdf3' },
+      OTHER: { flag: '⚪', label: 'Other', color: 'var(--ink-soft)', bg: 'var(--grey-bg)' },
+    };
+    /* Falls back gracefully for custom free-text values (e.g. "Polish") that
+       were typed into the "Other" field — shown with a neutral badge. */
+    function originMeta(code) { return ORIGIN_META[code] || { flag: '⚪', label: code, color: 'var(--ink-soft)', bg: 'var(--grey-bg)' }; }
 
-    function originEmoji(c) { return c === 'RU' ? '🇷🇺' : c === 'UA' ? '🇺🇦' : '⚪'; }
-    function originColor(c) { return c === 'RU' ? '#1d4ed8' : c === 'UA' ? '#a16207' : 'var(--ink-soft)'; }
-    function originBg(c) { return c === 'RU' ? '#eff6ff' : c === 'UA' ? '#fefce8' : 'var(--grey-bg)'; }
+    /* Gender of the blogger — a second, independent axis so combos like
+       "Prague + Czech + Female" are one tab + two pill clicks away. */
+    const GENDER_OPTIONS = ['female', 'male', 'other'];
+    const GENDER_META = {
+      female: { icon: '♀', label: 'Female', color: '#db2777', bg: '#fdf2f8' },
+      male: { icon: '♂', label: 'Male', color: '#2563eb', bg: '#eff6ff' },
+      other: { icon: '•', label: 'Other', color: 'var(--ink-soft)', bg: 'var(--grey-bg)' },
+    };
+
     function truncate(s, n) { if (!s) return '—'; return s.length > n ? s.slice(0, n) + '…' : s; }
 
     function bloggerStatusBadgeClass(status) {
@@ -87,7 +108,15 @@
 
     function applyLightFilters(list) {
       return list.filter((b) => {
-        if (originFilter.length && !(b.audienceCountries || []).some((c) => originFilter.includes(c))) return false;
+        if (originFilter.length) {
+          const val = (b.audienceCountries || [])[0];
+          const matches = val && (
+            (originFilter.includes('OTHER') && !KNOWN_ORIGIN_CODES.includes(val)) ||
+            originFilter.includes(val)
+          );
+          if (!matches) return false;
+        }
+        if (genderFilter.length && !genderFilter.includes(b.gender)) return false;
         if (filters.collabType && b.collabType !== filters.collabType) return false;
         if (filters.status && b.status !== filters.status) return false;
         return true;
@@ -146,7 +175,7 @@
 
     function onSearchChange(value) { filters.search = value; render(); }
     function onFilterChange(key, value) { filters[key] = value; render(); }
-    function clearLightFilters() { originFilter = []; filters.collabType = ''; filters.status = ''; render(); }
+    function clearLightFilters() { originFilter = []; genderFilter = []; filters.collabType = ''; filters.status = ''; render(); }
 
     function toggleOriginFilter(el) {
       el.classList.toggle('selected');
@@ -154,13 +183,25 @@
       render();
     }
 
+    function toggleGenderFilter(el) {
+      el.classList.toggle('selected');
+      genderFilter = [...document.querySelectorAll('#gender-filter-chips .chip.selected')].map((c) => c.dataset.gender);
+      render();
+    }
+
     function renderQuickFilters() {
       return `
         <div style="display:flex;flex-wrap:wrap;gap:18px;align-items:flex-end;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line-soft);">
           <div>
-            <div class="small muted" style="margin-bottom:5px;font-weight:600;">Blogger</div>
+            <div class="small muted" style="margin-bottom:5px;font-weight:600;">Nationality</div>
             <div class="chip-select" id="origin-filter-chips">
-              ${ORIGIN_OPTIONS.map((c) => `<div class="chip ${originFilter.includes(c) ? 'selected' : ''}" data-origin="${c}" onclick="toggleOriginFilter(this)">${originEmoji(c)} ${c}</div>`).join('')}
+              ${ORIGIN_OPTIONS.map((c) => `<div class="chip ${originFilter.includes(c) ? 'selected' : ''}" data-origin="${c}" onclick="toggleOriginFilter(this)">${originMeta(c).flag} ${originMeta(c).label}</div>`).join('')}
+            </div>
+          </div>
+          <div>
+            <div class="small muted" style="margin-bottom:5px;font-weight:600;">Gender</div>
+            <div class="chip-select" id="gender-filter-chips">
+              ${GENDER_OPTIONS.map((g) => `<div class="chip ${genderFilter.includes(g) ? 'selected' : ''}" data-gender="${g}" onclick="toggleGenderFilter(this)">${GENDER_META[g].icon} ${GENDER_META[g].label}</div>`).join('')}
             </div>
           </div>
           <div>
@@ -177,7 +218,7 @@
               ${Object.entries(STATUS_LABELS_LOCAL).map(([k, v]) => `<option value="${k}" ${filters.status === k ? 'selected' : ''}>${v}</option>`).join('')}
             </select>
           </div>
-          ${(originFilter.length || filters.collabType || filters.status) ? '<button class="btn btn-ghost btn-sm" onclick="clearLightFilters()">Clear filters</button>' : ''}
+          ${(originFilter.length || genderFilter.length || filters.collabType || filters.status) ? '<button class="btn btn-ghost btn-sm" onclick="clearLightFilters()">Clear filters</button>' : ''}
         </div>
       `;
     }
@@ -231,17 +272,19 @@
     function bloggerTable(list) {
       const sorted = [...list].sort((a, b) => statsFreshness(b.statsUpdatedAt).days - statsFreshness(a.statsUpdatedAt).days);
       return `<div class="table-scroll"><table>
-        <thead><tr><th>Profile</th><th>Email</th><th>Origin</th><th>Followers</th><th>ER</th><th>Avg reach</th><th>Type</th><th>Status</th><th>Freshness</th><th>Terms / notes</th><th></th></tr></thead>
+        <thead><tr><th>Profile</th><th>Email</th><th>Tags</th><th>Followers</th><th>ER</th><th>Avg reach</th><th>Type</th><th>Status</th><th>Freshness</th><th>Terms / notes</th><th></th></tr></thead>
         <tbody>
         ${sorted.map((b) => {
           const fresh = statsFreshness(b.statsUpdatedAt);
           const initial = (b.profileName || '?').trim().charAt(0).toUpperCase() || '?';
           const origin = (b.audienceCountries || [])[0] || null;
+          const om = origin ? originMeta(origin) : null;
+          const gm = b.gender ? GENDER_META[b.gender] : null;
           return `
           <tr>
             <td>
               <div style="display:flex;align-items:center;gap:10px;">
-                <div class="avatar" style="width:30px;height:30px;font-size:12.5px;flex-shrink:0;${origin ? `background:${originColor(origin)};` : ''}">${escapeHtml(initial)}</div>
+                <div class="avatar" style="width:30px;height:30px;font-size:12.5px;flex-shrink:0;${om ? `background:${om.color};` : ''}">${escapeHtml(initial)}</div>
                 <div>
                   <strong>${escapeHtml(b.profileName)}</strong>
                   <div class="small muted">
@@ -253,7 +296,10 @@
               </div>
             </td>
             <td class="small">${escapeHtml(b.email || '—')}</td>
-            <td>${origin ? `<span class="badge" style="background:${originBg(origin)};color:${originColor(origin)};">${originEmoji(origin)} ${origin}</span>` : '<span class="muted small">—</span>'}</td>
+            <td style="white-space:nowrap;">
+              ${om ? `<span class="badge" style="background:${om.bg};color:${om.color};" title="${escapeHtml(om.label)}">${om.flag} ${escapeHtml(origin)}</span>` : '<span class="muted small">—</span>'}
+              ${gm ? `<span class="badge" style="background:${gm.bg};color:${gm.color};margin-left:3px;">${gm.icon}</span>` : ''}
+            </td>
             <td>${b.followersCount != null ? Number(b.followersCount).toLocaleString() : '—'}</td>
             <td>${b.engagementRate != null ? b.engagementRate + '%' : '—'}</td>
             <td>${b.avgReach90d != null ? Number(b.avgReach90d).toLocaleString() : '—'}</td>
@@ -278,6 +324,8 @@
     /* ---------------- Add / Edit modal ---------------- */
     function openBloggerModal(id) {
       const b = id ? db.bloggerDirectory.find((x) => x.id === id) : null;
+      const storedOrigin = b ? (b.audienceCountries || [])[0] || null : null;
+      const isCustomOrigin = storedOrigin && !KNOWN_ORIGIN_CODES.includes(storedOrigin);
       document.getElementById('modal-root').innerHTML = `
         <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
           <div class="modal">
@@ -306,9 +354,17 @@
                 <datalist id="lang-suggestions">${LANGUAGE_SUGGESTIONS.map((l) => `<option value="${l}">`).join('')}</datalist>
               </div>
             </div>
-            <label>Blogger origin <span class="field-hint" style="display:inline;">(is the blogger themself RU or UA — not their audience; click again to clear)</span></label>
+            <label>Nationality <span class="field-hint" style="display:inline;">(who the blogger themself is — not their audience; click again to clear)</span></label>
             <div class="chip-select" id="audience-chips">
-              ${ORIGIN_OPTIONS.map((c) => `<div class="chip ${b && (b.audienceCountries || []).includes(c) ? 'selected' : ''}" data-country="${c}" onclick="selectOriginChip(this)">${originEmoji(c)} ${c}</div>`).join('')}
+              ${KNOWN_ORIGIN_CODES.map((c) => `<div class="chip ${storedOrigin === c ? 'selected' : ''}" data-country="${c}" onclick="selectOriginChip(this)">${originMeta(c).flag} ${c}</div>`).join('')}
+              <div class="chip ${isCustomOrigin ? 'selected' : ''}" data-country="OTHER" onclick="selectOriginChip(this)">⚪ Other</div>
+            </div>
+            <div id="b-origin-other-wrap" style="display:${isCustomOrigin ? 'block' : 'none'};margin-top:8px;">
+              <input id="b-origin-other" placeholder="e.g. Polish, German, Vietnamese…" value="${isCustomOrigin ? escapeHtml(storedOrigin) : ''}" />
+            </div>
+            <label>Gender</label>
+            <div class="chip-select" id="gender-chips">
+              ${GENDER_OPTIONS.map((g) => `<div class="chip ${b && b.gender === g ? 'selected' : ''}" data-gender="${g}" onclick="selectGenderChip(this)">${GENDER_META[g].icon} ${GENDER_META[g].label}</div>`).join('')}
             </div>
             <div class="grid grid-2">
               <div>
@@ -331,15 +387,40 @@
         </div>`;
     }
 
-    /* Blogger origin is either/or — selecting one clears the others.
-       Clicking the already-selected chip clears it back to "unset". */
+    /* Blogger nationality is either/or — selecting one clears the others.
+       Clicking the already-selected chip clears it back to "unset".
+       Picking "Other" reveals a free-text field for anything outside the
+       five common markets. */
     function selectOriginChip(el) {
+      const wasSelected = el.classList.contains('selected');
+      [...el.parentElement.children].forEach((c) => c.classList.remove('selected'));
+      if (!wasSelected) el.classList.add('selected');
+      const wrap = document.getElementById('b-origin-other-wrap');
+      if (wrap) {
+        const showOther = !wasSelected && el.dataset.country === 'OTHER';
+        wrap.style.display = showOther ? 'block' : 'none';
+        if (!showOther) document.getElementById('b-origin-other').value = '';
+      }
+    }
+
+    function selectGenderChip(el) {
       const wasSelected = el.classList.contains('selected');
       [...el.parentElement.children].forEach((c) => c.classList.remove('selected'));
       if (!wasSelected) el.classList.add('selected');
     }
 
     function readBloggerForm() {
+      const originEl = document.querySelector('#audience-chips .chip.selected');
+      let audienceCountries = [];
+      if (originEl) {
+        if (originEl.dataset.country === 'OTHER') {
+          const custom = document.getElementById('b-origin-other').value.trim();
+          if (custom) audienceCountries = [custom];
+        } else {
+          audienceCountries = [originEl.dataset.country];
+        }
+      }
+      const genderEl = document.querySelector('#gender-chips .chip.selected');
       return {
         profileName: document.getElementById('b-name').value.trim(),
         instagramUrl: document.getElementById('b-instagram').value.trim(),
@@ -351,7 +432,8 @@
         audienceNotes: document.getElementById('b-audience').value.trim(),
         city: document.getElementById('b-city').value.trim(),
         languageGroup: document.getElementById('b-lang').value.trim(),
-        audienceCountries: [...document.querySelectorAll('#audience-chips .chip.selected')].map((el) => el.dataset.country),
+        audienceCountries,
+        gender: genderEl ? genderEl.dataset.gender : null,
         collabType: document.getElementById('b-collabtype').value,
         status: document.getElementById('b-status').value,
         termsNotes: document.getElementById('b-terms').value.trim(),
@@ -399,7 +481,8 @@
       audienceNotes: ['audiencenotes', 'audience', 'аудитория'],
       city: ['city', 'город'],
       languageGroup: ['languagegroup', 'language', 'язык'],
-      audienceCountries: ['origin', 'bloggerorigin', 'ru/ua', 'ruua', 'национальность', 'происхождение', 'страна'],
+      audienceCountries: ['origin', 'nationality', 'bloggerorigin', 'ru/ua', 'ruua', 'национальность', 'происхождение', 'страна'],
+      gender: ['gender', 'sex', 'пол'],
       collabType: ['collabtype', 'type', 'бартер/оплата', 'collab'],
       termsNotes: ['termsnotes', 'terms', 'notes', 'условия', 'заметки'],
       status: ['status', 'статус'],
@@ -407,6 +490,27 @@
 
     function normalizeHeader(h) {
       return h.trim().toLowerCase().replace(/[\s_]+/g, '');
+    }
+
+    /* Maps loose spreadsheet text to a known origin code where possible,
+       otherwise keeps the original text as a custom nationality. */
+    function normalizeOriginToken(raw) {
+      const t = raw.trim();
+      const low = t.toLowerCase();
+      if (['ru', 'russian', 'русский', 'россия', 'рус'].includes(low)) return 'RU';
+      if (['ua', 'ukrainian', 'украинский', 'украина', 'укр'].includes(low)) return 'UA';
+      if (['cz', 'czech', 'чех', 'чешский', 'чехия'].includes(low)) return 'CZ';
+      if (['sk', 'slovak', 'словак', 'словацкий', 'словакия'].includes(low)) return 'SK';
+      if (['en', 'english', 'англ', 'англоязычный', 'international'].includes(low)) return 'EN';
+      return t;
+    }
+
+    function normalizeGenderToken(raw) {
+      const low = raw.trim().toLowerCase();
+      if (['m', 'male', 'м', 'муж', 'мужчина'].includes(low)) return 'male';
+      if (['f', 'female', 'ж', 'жен', 'женщина'].includes(low)) return 'female';
+      if (low) return 'other';
+      return null;
     }
 
     function parseCSVLine(line) {
@@ -432,7 +536,7 @@
           <div class="modal">
             <button class="modal-close" onclick="closeModal()">×</button>
             <h2>Import from Excel / CSV</h2>
-            <p class="small muted">Copy the rows from your Excel sheet (including the header row) and paste them below — comma or tab separated both work. Recognized columns: profile name, Instagram, TikTok, email, followers, ER, avg reach, audience notes, city, language group, blogger origin (RU or UA — the blogger themself, not their audience), collab type (barter/paid/both), terms/notes, status.</p>
+            <p class="small muted">Copy the rows from your Excel sheet (including the header row) and paste them below — comma or tab separated both work. Recognized columns: profile name, Instagram, TikTok, email, followers, ER, avg reach, audience notes, city, language group, nationality (RU/UA/CZ/SK/EN or free text — the blogger themself, not their audience), gender (male/female), collab type (barter/paid/both), terms/notes, status.</p>
             <textarea id="csv-input" rows="10" placeholder="Name, Instagram, City, Language...&#10;Anna K., https://instagram.com/annak, Prague, Русский..."></textarea>
             <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitImportCSV()">Import rows</button>
           </div>
@@ -458,9 +562,10 @@
           if (['followersCount', 'avgReach90d'].includes(field)) obj[field] = Number(cells[i].replace(/[^\d.-]/g, '')) || null;
           else if (field === 'engagementRate') obj[field] = Number(cells[i].replace(/[^\d.-]/g, '')) || null;
           else if (field === 'audienceCountries') {
-            const first = cells[i].split(/[/,;]+/).map((s) => s.trim().toUpperCase()).filter(Boolean)[0];
-            obj[field] = first ? [(first === 'RU' || first === 'UA') ? first : 'Other'] : [];
+            const first = cells[i].split(/[/,;]+/).map((s) => s.trim()).filter(Boolean)[0];
+            obj[field] = first ? [normalizeOriginToken(first)] : [];
           }
+          else if (field === 'gender') obj[field] = normalizeGenderToken(cells[i]);
           else obj[field] = cells[i];
         });
         return obj;
@@ -479,10 +584,10 @@
     /* ---------------- CSV export ---------------- */
     function exportCSV() {
       const rows = applyLightFilters(db.bloggerDirectory);
-      const header = ['Profile name', 'Instagram', 'TikTok', 'Email', 'Followers', 'ER (%)', 'Avg reach (90d)', 'Audience notes', 'City', 'Language group', 'Blogger origin (RU/UA)', 'Collab type', 'Status', 'Terms / notes'];
+      const header = ['Profile name', 'Instagram', 'TikTok', 'Email', 'Followers', 'ER (%)', 'Avg reach (90d)', 'Audience notes', 'City', 'Language group', 'Nationality', 'Gender', 'Collab type', 'Status', 'Terms / notes'];
       const body = rows.map((b) => [
         b.profileName, b.instagramUrl, b.tiktokUrl, b.email, b.followersCount, b.engagementRate, b.avgReach90d,
-        b.audienceNotes, b.city, b.languageGroup, (b.audienceCountries || []).join('/'), COLLAB_TYPE_LABELS[b.collabType] || b.collabType, STATUS_LABELS_LOCAL[b.status] || b.status, b.termsNotes,
+        b.audienceNotes, b.city, b.languageGroup, (b.audienceCountries || []).join('/'), b.gender || '', COLLAB_TYPE_LABELS[b.collabType] || b.collabType, STATUS_LABELS_LOCAL[b.status] || b.status, b.termsNotes,
       ]);
       const csv = [header, ...body].map((r) => r.map((v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`).join(',')).join('\n');
       const blob = new Blob([csv], { type: 'text/csv' });
