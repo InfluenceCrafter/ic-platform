@@ -36,7 +36,6 @@
 
     const COLLAB_TYPE_LABELS = { barter: 'Barter', paid: 'Paid', both: 'Barter or paid' };
     const STATUS_LABELS_LOCAL = { active: 'Active', contacted: 'Contacted', archived: 'Archived' };
-    const LANGUAGE_SUGGESTIONS = ['Čeština', 'Русский', 'English', 'Slovenčina'];
     /* Defaults shown in the city dropdown, in local spelling — the list
        grows on its own as new cities get used (see buildOptionList). */
     const CITY_SUGGESTIONS = ['Praha', 'Plzeň', 'Brno', 'Kraków', 'Warszawa'];
@@ -142,11 +141,11 @@
     }
 
     /* ---------------- render: sticky toolbar + tabs + table ---------------- */
-    /* City/language grouping is case-insensitive on purpose — "Prague" and
-       "prague" typed by different people must land in the same group, not
-       fork into a second tab. The tab label shown is whichever casing was
-       used most often, so one stray lowercase entry doesn't relabel the
-       whole group either. */
+    /* City grouping is case-insensitive on purpose — "Prague" and "prague"
+       typed by different people must land in the same group, not fork into
+       a second tab. The tab label shown is whichever casing was used most
+       often, so one stray lowercase entry doesn't relabel the whole group
+       either. */
     function groupKey(raw, fallback) { return ((raw && String(raw).trim()) || fallback).toLowerCase(); }
 
     function countByNormalized(list, key, fallback) {
@@ -316,7 +315,7 @@
     function renderSearchResults(all, q) {
       const needle = q.trim().toLowerCase();
       const rows = applyLightFilters(all).filter((b) => {
-        const hay = `${b.profileName || ''} ${b.email || ''} ${b.instagramUrl || ''} ${b.tiktokUrl || ''} ${b.city || ''} ${b.languageGroup || ''}`.toLowerCase();
+        const hay = `${b.profileName || ''} ${b.email || ''} ${b.instagramUrl || ''} ${b.tiktokUrl || ''} ${b.city || ''}`.toLowerCase();
         return hay.includes(needle);
       });
       return `
@@ -393,9 +392,7 @@
       const storedOrigin = b ? (b.audienceCountries || [])[0] || null : null;
       const isCustomOrigin = storedOrigin && !KNOWN_ORIGIN_CODES.includes(storedOrigin);
       const cityOptions = buildOptionList(CITY_SUGGESTIONS, db.bloggerDirectory, 'city', 'No city set');
-      const langOptions = buildOptionList(LANGUAGE_SUGGESTIONS, db.bloggerDirectory, 'languageGroup', 'No language group set');
       const cityIsCustom = b && b.city && !cityOptions.some((c) => c.toLowerCase() === b.city.trim().toLowerCase());
-      const langIsCustom = b && b.languageGroup && !langOptions.some((c) => c.toLowerCase() === b.languageGroup.trim().toLowerCase());
       document.getElementById('modal-root').innerHTML = `
         <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
           <div class="modal">
@@ -437,29 +434,14 @@
             </div>
             <label>Other notes</label>
             <textarea id="b-audience" placeholder="Anything else — spending power, brand affinity, past collab feedback…">${b ? escapeHtml(b.audienceNotes || '') : ''}</textarea>
-            <div class="grid grid-2">
-              <div>
-                <label>City <span class="field-hint" style="display:inline;">(pick from the list so casing always matches — "Prague" and "prague" would otherwise split into two groups)</span></label>
-                <select id="b-city-select" onchange="onNewOptionToggle('city', this.value)">
-                  <option value="">— Select city —</option>
-                  ${cityOptions.map((c) => `<option value="${escapeHtml(c)}" ${b && b.city && b.city.trim().toLowerCase() === c.toLowerCase() ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
-                  <option value="__new__" ${cityIsCustom ? 'selected' : ''}>+ Add new city…</option>
-                </select>
-                <div id="b-city-new-wrap" style="display:${cityIsCustom ? 'block' : 'none'};margin-top:8px;">
-                  <input id="b-city-new" placeholder="Type new city name…" value="${cityIsCustom ? escapeHtml(b.city) : ''}" />
-                </div>
-              </div>
-              <div>
-                <label>Language group</label>
-                <select id="b-lang-select" onchange="onNewOptionToggle('lang', this.value)">
-                  <option value="">— Select language —</option>
-                  ${langOptions.map((l) => `<option value="${escapeHtml(l)}" ${b && b.languageGroup && b.languageGroup.trim().toLowerCase() === l.toLowerCase() ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
-                  <option value="__new__" ${langIsCustom ? 'selected' : ''}>+ Add new language…</option>
-                </select>
-                <div id="b-lang-new-wrap" style="display:${langIsCustom ? 'block' : 'none'};margin-top:8px;">
-                  <input id="b-lang-new" placeholder="Type new language group…" value="${langIsCustom ? escapeHtml(b.languageGroup) : ''}" />
-                </div>
-              </div>
+            <label>City <span class="field-hint" style="display:inline;">(pick from the list so casing always matches — "Prague" and "prague" would otherwise split into two groups)</span></label>
+            <select id="b-city-select" onchange="onNewOptionToggle('city', this.value)">
+              <option value="">— Select city —</option>
+              ${cityOptions.map((c) => `<option value="${escapeHtml(c)}" ${b && b.city && b.city.trim().toLowerCase() === c.toLowerCase() ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+              <option value="__new__" ${cityIsCustom ? 'selected' : ''}>+ Add new city…</option>
+            </select>
+            <div id="b-city-new-wrap" style="display:${cityIsCustom ? 'block' : 'none'};margin-top:8px;">
+              <input id="b-city-new" placeholder="Type new city name…" value="${cityIsCustom ? escapeHtml(b.city) : ''}" />
             </div>
             <label>Nationality <span class="field-hint" style="display:inline;">(who the blogger themself is — not their audience; click again to clear)</span></label>
             <div class="chip-select" id="audience-chips">
@@ -587,8 +569,6 @@
       const genderEl = document.querySelector('#gender-chips .chip.selected');
       const citySelect = document.getElementById('b-city-select').value;
       const city = citySelect === '__new__' ? document.getElementById('b-city-new').value.trim() : citySelect;
-      const langSelect = document.getElementById('b-lang-select').value;
-      const languageGroup = langSelect === '__new__' ? document.getElementById('b-lang-new').value.trim() : langSelect;
 
       const ageRanges = [...document.querySelectorAll('#b-aud-age-rows .audience-row')]
         .map((row) => ({
@@ -624,7 +604,6 @@
         avgReach90d: document.getElementById('b-reach').value ? Number(document.getElementById('b-reach').value) : null,
         audienceNotes: document.getElementById('b-audience').value.trim(),
         city,
-        languageGroup,
         audienceCountries,
         audienceStats,
         gender: genderEl ? genderEl.dataset.gender : null,
@@ -676,7 +655,6 @@
       avgReach90d: ['avgreach90d', 'reach', 'avgreach', 'охват'],
       audienceNotes: ['audiencenotes', 'audience', 'аудитория'],
       city: ['city', 'город'],
-      languageGroup: ['languagegroup', 'language', 'язык'],
       audienceCountries: ['origin', 'nationality', 'bloggerorigin', 'ru/ua', 'ruua', 'национальность', 'происхождение', 'страна'],
       gender: ['gender', 'sex', 'пол'],
       collabType: ['collabtype', 'type', 'бартер/оплата', 'collab'],
@@ -734,7 +712,7 @@
           <div class="modal">
             <button class="modal-close" onclick="closeModal()">×</button>
             <h2>Import from Excel / CSV</h2>
-            <p class="small muted">Copy the rows from your Excel sheet (including the header row) and paste them below — comma or tab separated both work. Recognized columns: profile name, Instagram, TikTok, email, followers, ER, avg reach, audience notes, city, language group, nationality (RU/UA/CZ/SK/EN or free text — the blogger themself, not their audience), gender (male/female), collab type (barter/paid/both), reel price, story price, terms/notes, status.</p>
+            <p class="small muted">Copy the rows from your Excel sheet (including the header row) and paste them below — comma or tab separated both work. Recognized columns: profile name, Instagram, TikTok, email, followers, ER, avg reach, audience notes, city, nationality (RU/UA/CZ/SK/EN or free text — the blogger themself, not their audience), gender (male/female), collab type (barter/paid/both), reel price, story price, terms/notes, status.</p>
             <textarea id="csv-input" rows="10" placeholder="Name, Instagram, City, Language...&#10;Anna K., https://instagram.com/annak, Prague, Русский..."></textarea>
             <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitImportCSV()">Import rows</button>
           </div>
@@ -772,14 +750,12 @@
       if (newRows.length === 0) { toast('No valid rows found.'); return; }
       await reload();
 
-      /* Snap city/language casing to whatever's already canonical in the
-         database (or the seed list), so a bulk CSV import doesn't spawn
-         its own "Prague" vs "prague" duplicate the way manual typing did. */
+      /* Snap city casing to whatever's already canonical in the database (or
+         the seed list), so a bulk CSV import doesn't spawn its own "Prague"
+         vs "prague" duplicate the way manual typing did. */
       const cityCanon = buildOptionList(CITY_SUGGESTIONS, db.bloggerDirectory, 'city', 'No city set');
-      const langCanon = buildOptionList(LANGUAGE_SUGGESTIONS, db.bloggerDirectory, 'languageGroup', 'No language group set');
       newRows.forEach((r) => {
         if (r.city) { const m = cityCanon.find((c) => c.toLowerCase() === r.city.toLowerCase()); if (m) r.city = m; }
-        if (r.languageGroup) { const m = langCanon.find((c) => c.toLowerCase() === r.languageGroup.toLowerCase()); if (m) r.languageGroup = m; }
       });
 
       const inserted = await dbInsertMany('bloggerDirectory', newRows);
@@ -793,10 +769,10 @@
     /* ---------------- CSV export ---------------- */
     function exportCSV() {
       const rows = applyLightFilters(db.bloggerDirectory);
-      const header = ['Profile name', 'Instagram', 'TikTok', 'Email', 'Followers', 'ER (%)', 'Avg reach (90d)', 'Audience notes', 'City', 'Language group', 'Nationality', 'Gender', 'Collab type', 'Reel price', 'Story price', 'Status', 'Terms / notes'];
+      const header = ['Profile name', 'Instagram', 'TikTok', 'Email', 'Followers', 'ER (%)', 'Avg reach (90d)', 'Audience notes', 'City', 'Nationality', 'Gender', 'Collab type', 'Reel price', 'Story price', 'Status', 'Terms / notes'];
       const body = rows.map((b) => [
         b.profileName, b.instagramUrl, b.tiktokUrl, b.email, b.followersCount, b.engagementRate, b.avgReach90d,
-        b.audienceNotes, b.city, b.languageGroup, (b.audienceCountries || []).join('/'), b.gender || '', COLLAB_TYPE_LABELS[b.collabType] || b.collabType, b.reelPrice != null ? b.reelPrice : '', b.storyPrice != null ? b.storyPrice : '', STATUS_LABELS_LOCAL[b.status] || b.status, b.termsNotes,
+        b.audienceNotes, b.city, (b.audienceCountries || []).join('/'), b.gender || '', COLLAB_TYPE_LABELS[b.collabType] || b.collabType, b.reelPrice != null ? b.reelPrice : '', b.storyPrice != null ? b.storyPrice : '', STATUS_LABELS_LOCAL[b.status] || b.status, b.termsNotes,
       ]);
       const csv = [header, ...body].map((r) => r.map((v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`).join(',')).join('\n');
       const blob = new Blob([csv], { type: 'text/csv' });
