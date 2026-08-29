@@ -214,6 +214,7 @@ create table if not exists blogger_directory (
   engagement_rate numeric(5,2),
   avg_reach_90d integer,
   audience_notes text,
+  audience_stats jsonb default '{}'::jsonb,
   city text,
   language_group text,
   audience_countries text[] default '{}',

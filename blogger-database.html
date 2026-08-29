@@ -69,6 +69,49 @@
       other: { icon: '•', label: 'Other', color: 'var(--ink-soft)', bg: 'var(--grey-bg)' },
     };
 
+    /* Structured audience data — who follows the blogger, as opposed to the
+       blogger's own city/nationality/gender above. Stored as one jsonb blob
+       (audienceStats: { genderSplit, ageRanges, topCities }) since it's a
+       flexible, variable-length shape that doesn't need its own table. */
+    const AUDIENCE_AGE_BRACKETS = ['13-17', '18-24', '25-34', '35-44', '45-54', '55+'];
+
+    function audienceStatsSummary(b) {
+      const s = b.audienceStats || {};
+      const parts = [];
+      if (s.genderSplit) {
+        const top = ['female', 'male', 'other']
+          .map((k) => [k, Number(s.genderSplit[k]) || 0])
+          .filter(([, v]) => v > 0)
+          .sort((a, c) => c[1] - a[1])[0];
+        if (top) parts.push(`${GENDER_META[top[0]].icon} ${top[1]}%`);
+      }
+      if (Array.isArray(s.ageRanges) && s.ageRanges.length) {
+        const top = [...s.ageRanges].sort((a, c) => (Number(c.percent) || 0) - (Number(a.percent) || 0))[0];
+        if (top && top.range) parts.push(`${top.range}: ${top.percent}%`);
+      }
+      if (Array.isArray(s.topCities) && s.topCities.length) {
+        const top = [...s.topCities].sort((a, c) => (Number(c.percent) || 0) - (Number(a.percent) || 0))[0];
+        if (top && top.city) parts.push(`${top.city} ${top.percent}%`);
+      }
+      return parts.join(' · ');
+    }
+
+    function audienceStatsFullText(b) {
+      const s = b.audienceStats || {};
+      const lines = [];
+      if (s.genderSplit) {
+        const bits = ['female', 'male', 'other'].filter((k) => s.genderSplit[k] != null).map((k) => `${GENDER_META[k].label} ${s.genderSplit[k]}%`);
+        if (bits.length) lines.push('Gender: ' + bits.join(', '));
+      }
+      if (Array.isArray(s.ageRanges) && s.ageRanges.length) {
+        lines.push('Age: ' + s.ageRanges.filter((r) => r.range).map((r) => `${r.range} ${r.percent || 0}%`).join(', '));
+      }
+      if (Array.isArray(s.topCities) && s.topCities.length) {
+        lines.push('Audience cities: ' + s.topCities.filter((c) => c.city).map((c) => `${c.city} ${c.percent || 0}%`).join(', '));
+      }
+      return lines.join('\n');
+    }
+
     function truncate(s, n) { if (!s) return '—'; return s.length > n ? s.slice(0, n) + '…' : s; }
 
     function bloggerStatusBadgeClass(status) {
@@ -307,7 +350,7 @@
     function bloggerTable(list) {
       const sorted = [...list].sort((a, b) => statsFreshness(b.statsUpdatedAt).days - statsFreshness(a.statsUpdatedAt).days);
       return `<div class="table-scroll"><table>
-        <thead><tr><th>Profile</th><th>Email</th><th>Tags</th><th>Followers</th><th>ER</th><th>Avg reach</th><th>Type</th><th>Status</th><th>Freshness</th><th>Terms / notes</th><th></th></tr></thead>
+        <thead><tr><th>Profile</th><th>Email</th><th>Tags</th><th>Audience</th><th>Followers</th><th>ER</th><th>Avg reach</th><th>Type</th><th>Status</th><th>Freshness</th><th>Terms / notes</th><th></th></tr></thead>
         <tbody>
         ${sorted.map((b) => {
           const fresh = statsFreshness(b.statsUpdatedAt);
@@ -335,6 +378,7 @@
               ${om ? `<span class="badge" style="background:${om.bg};color:${om.color};" title="${escapeHtml(om.label)}">${om.flag} ${escapeHtml(origin)}</span>` : '<span class="muted small">—</span>'}
               ${gm ? `<span class="badge" style="background:${gm.bg};color:${gm.color};margin-left:3px;">${gm.icon}</span>` : ''}
             </td>
+            <td class="small" style="max-width:170px;" title="${escapeHtml(audienceStatsFullText(b))}">${audienceStatsSummary(b) ? escapeHtml(audienceStatsSummary(b)) : '<span class="muted">—</span>'}</td>
             <td>${b.followersCount != null ? Number(b.followersCount).toLocaleString() : '—'}</td>
             <td>${b.engagementRate != null ? b.engagementRate + '%' : '—'}</td>
             <td>${b.avgReach90d != null ? Number(b.avgReach90d).toLocaleString() : '—'}</td>
@@ -383,8 +427,29 @@
               <div><label>ER (%)</label><input id="b-er" type="number" step="0.01" value="${b && b.engagementRate != null ? b.engagementRate : ''}" /></div>
               <div><label>Avg reach (90d, monthly)</label><input id="b-reach" type="number" value="${b && b.avgReach90d != null ? b.avgReach90d : ''}" /></div>
             </div>
-            <label>Audience notes</label>
-            <textarea id="b-audience" placeholder="Who follows them, demographics, spending power…">${b ? escapeHtml(b.audienceNotes || '') : ''}</textarea>
+            <div class="audience-stats-block" style="margin:10px 0 4px;padding:12px;border:1px solid var(--line-soft);border-radius:var(--radius-sm);background:var(--grey-bg);">
+              <label style="margin-top:0;">Audience data <span class="field-hint" style="display:inline;">(who follows them — not the blogger's own city/nationality/gender)</span></label>
+              <div style="margin-top:8px;">
+                <div class="small muted" style="margin-bottom:4px;">Gender split of audience (%)</div>
+                <div class="grid grid-3">
+                  <div><input id="b-aud-gender-female" type="number" min="0" max="100" placeholder="♀ Female %" value="${b && b.audienceStats && b.audienceStats.genderSplit && b.audienceStats.genderSplit.female != null ? b.audienceStats.genderSplit.female : ''}" /></div>
+                  <div><input id="b-aud-gender-male" type="number" min="0" max="100" placeholder="♂ Male %" value="${b && b.audienceStats && b.audienceStats.genderSplit && b.audienceStats.genderSplit.male != null ? b.audienceStats.genderSplit.male : ''}" /></div>
+                  <div><input id="b-aud-gender-other" type="number" min="0" max="100" placeholder="Other %" value="${b && b.audienceStats && b.audienceStats.genderSplit && b.audienceStats.genderSplit.other != null ? b.audienceStats.genderSplit.other : ''}" /></div>
+                </div>
+              </div>
+              <div style="margin-top:12px;">
+                <div class="small muted" style="margin-bottom:4px;">Age breakdown (%)</div>
+                <div id="b-aud-age-rows"></div>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="addAudienceAgeRow()">+ Add age group</button>
+              </div>
+              <div style="margin-top:12px;">
+                <div class="small muted" style="margin-bottom:4px;">Where the audience is based (%, by city)</div>
+                <div id="b-aud-city-rows"></div>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="addAudienceCityRow()">+ Add city</button>
+              </div>
+            </div>
+            <label>Other notes</label>
+            <textarea id="b-audience" placeholder="Anything else — spending power, brand affinity, past collab feedback…">${b ? escapeHtml(b.audienceNotes || '') : ''}</textarea>
             <div class="grid grid-2">
               <div>
                 <label>City <span class="field-hint" style="display:inline;">(pick from the list so casing always matches — "Prague" and "prague" would otherwise split into two groups)</span></label>
@@ -440,6 +505,44 @@
             <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitBlogger(${b ? `'${b.id}'` : 'null'})">${b ? 'Save changes' : 'Add blogger'}</button>
           </div>
         </div>`;
+      const savedAgeRanges = (b && b.audienceStats && Array.isArray(b.audienceStats.ageRanges) && b.audienceStats.ageRanges.length) ? b.audienceStats.ageRanges : [{}];
+      savedAgeRanges.forEach((r) => addAudienceAgeRow(r.range || '', r.percent != null ? r.percent : ''));
+      const savedTopCities = (b && b.audienceStats && Array.isArray(b.audienceStats.topCities) && b.audienceStats.topCities.length) ? b.audienceStats.topCities : [{}];
+      savedTopCities.forEach((r) => addAudienceCityRow(r.city || '', r.percent != null ? r.percent : ''));
+    }
+
+    /* Dynamic add/remove rows for the "Audience data" block — kept as plain
+       DOM manipulation (not re-rendering the whole modal template) so typing
+       in one row never disturbs the others or loses focus. */
+    function addAudienceAgeRow(range, percent) {
+      const container = document.getElementById('b-aud-age-rows');
+      if (!container) return;
+      const row = document.createElement('div');
+      row.className = 'audience-row';
+      row.style.cssText = 'display:flex;gap:8px;margin-bottom:6px;align-items:center;';
+      row.innerHTML = `
+        <select class="aud-age-select" style="flex:1;">
+          <option value="">— Age range —</option>
+          ${AUDIENCE_AGE_BRACKETS.map((r) => `<option value="${r}" ${range === r ? 'selected' : ''}>${r}</option>`).join('')}
+        </select>
+        <input type="number" class="aud-age-percent" placeholder="%" min="0" max="100" style="width:80px;" value="${percent != null && percent !== '' ? percent : ''}" />
+        <button type="button" class="btn btn-ghost btn-sm" onclick="this.parentElement.remove()">✕</button>
+      `;
+      container.appendChild(row);
+    }
+
+    function addAudienceCityRow(city, percent) {
+      const container = document.getElementById('b-aud-city-rows');
+      if (!container) return;
+      const row = document.createElement('div');
+      row.className = 'audience-row';
+      row.style.cssText = 'display:flex;gap:8px;margin-bottom:6px;align-items:center;';
+      row.innerHTML = `
+        <input class="aud-city-name" placeholder="City" style="flex:1;" value="${city ? escapeHtml(city) : ''}" />
+        <input type="number" class="aud-city-percent" placeholder="%" min="0" max="100" style="width:80px;" value="${percent != null && percent !== '' ? percent : ''}" />
+        <button type="button" class="btn btn-ghost btn-sm" onclick="this.parentElement.remove()">✕</button>
+      `;
+      container.appendChild(row);
     }
 
     /* Blogger nationality is either/or — selecting one clears the others.
@@ -486,6 +589,31 @@
       const city = citySelect === '__new__' ? document.getElementById('b-city-new').value.trim() : citySelect;
       const langSelect = document.getElementById('b-lang-select').value;
       const languageGroup = langSelect === '__new__' ? document.getElementById('b-lang-new').value.trim() : langSelect;
+
+      const ageRanges = [...document.querySelectorAll('#b-aud-age-rows .audience-row')]
+        .map((row) => ({
+          range: row.querySelector('.aud-age-select').value,
+          percent: row.querySelector('.aud-age-percent').value !== '' ? Number(row.querySelector('.aud-age-percent').value) : null,
+        }))
+        .filter((r) => r.range && r.percent != null);
+      const topCities = [...document.querySelectorAll('#b-aud-city-rows .audience-row')]
+        .map((row) => ({
+          city: row.querySelector('.aud-city-name').value.trim(),
+          percent: row.querySelector('.aud-city-percent').value !== '' ? Number(row.querySelector('.aud-city-percent').value) : null,
+        }))
+        .filter((r) => r.city && r.percent != null);
+      const genderSplit = {};
+      const gf = document.getElementById('b-aud-gender-female').value;
+      const gmv = document.getElementById('b-aud-gender-male').value;
+      const go = document.getElementById('b-aud-gender-other').value;
+      if (gf !== '') genderSplit.female = Number(gf);
+      if (gmv !== '') genderSplit.male = Number(gmv);
+      if (go !== '') genderSplit.other = Number(go);
+      const audienceStats = {};
+      if (ageRanges.length) audienceStats.ageRanges = ageRanges;
+      if (topCities.length) audienceStats.topCities = topCities;
+      if (Object.keys(genderSplit).length) audienceStats.genderSplit = genderSplit;
+
       return {
         profileName: document.getElementById('b-name').value.trim(),
         instagramUrl: document.getElementById('b-instagram').value.trim(),
@@ -498,6 +626,7 @@
         city,
         languageGroup,
         audienceCountries,
+        audienceStats,
         gender: genderEl ? genderEl.dataset.gender : null,
         collabType: document.getElementById('b-collabtype').value,
         status: document.getElementById('b-status').value,
