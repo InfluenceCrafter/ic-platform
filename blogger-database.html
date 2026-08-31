@@ -616,13 +616,13 @@
     }
 
     async function submitBlogger(id) {
-      const fields = readBloggerForm();
-      /* No field is mandatory anymore — you can save a near-blank row and
-         fill in the rest later. A totally nameless row would be impossible
-         to find again, so it gets a placeholder name instead of being
-         blocked. */
-      if (!fields.profileName) fields.profileName = 'Untitled blogger';
       try {
+        const fields = readBloggerForm();
+        /* No field is mandatory anymore — you can save a near-blank row and
+           fill in the rest later. A totally nameless row would be impossible
+           to find again, so it gets a placeholder name instead of being
+           blocked. */
+        if (!fields.profileName) fields.profileName = 'Untitled blogger';
         await reload();
         if (id) {
           const updated = await dbUpdate('bloggerDirectory', id, fields);
@@ -635,10 +635,10 @@
           toast('Blogger added.');
         }
       } catch (err) {
-        /* Previously a failed save here just did nothing visible — the
-           promise rejected and the error vanished into the console, which
-           looked exactly like the button not working at all. Now it's
-           surfaced so the real cause is obvious. */
+        /* Previously a failed save here (including a bad read of the form
+           itself) just did nothing visible — the error vanished into the
+           console, which looked exactly like the button not working at
+           all. Now it's surfaced so the real cause is obvious. */
         console.error('submitBlogger failed:', err);
         toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
         return;
