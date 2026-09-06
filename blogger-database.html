@@ -26,6 +26,7 @@
     let activeCity = null; // null = "All cities"
     let originFilter = []; // quick nationality pills, OR-filter within current tab
     let genderFilter = []; // quick gender pills, OR-filter within current tab
+    let sortBy = 'name'; // 'name' | 'followers' | 'er' | 'newest' | 'oldest'
 
     (async function () {
       const ctx = await requireRole(['admin']);
@@ -264,6 +265,11 @@
       render();
     }
 
+    function setSortBy(value) {
+      sortBy = value;
+      render();
+    }
+
     function renderQuickFilters() {
       return `
         <div style="display:flex;flex-wrap:wrap;gap:18px;align-items:flex-end;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line-soft);">
@@ -291,6 +297,16 @@
             <select style="width:auto;" onchange="onFilterChange('status', this.value)">
               <option value="">All</option>
               ${Object.entries(STATUS_LABELS_LOCAL).map(([k, v]) => `<option value="${k}" ${filters.status === k ? 'selected' : ''}>${v}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <div class="small muted" style="margin-bottom:5px;font-weight:600;">Sort by</div>
+            <select style="width:auto;" onchange="setSortBy(this.value)">
+              <option value="name" ${sortBy === 'name' ? 'selected' : ''}>Alphabetical (A–Z)</option>
+              <option value="followers" ${sortBy === 'followers' ? 'selected' : ''}>Followers (high→low)</option>
+              <option value="er" ${sortBy === 'er' ? 'selected' : ''}>Best ER (high→low)</option>
+              <option value="newest" ${sortBy === 'newest' ? 'selected' : ''}>Date added (newest first)</option>
+              <option value="oldest" ${sortBy === 'oldest' ? 'selected' : ''}>Date added (oldest first)</option>
             </select>
           </div>
           ${(originFilter.length || genderFilter.length || filters.collabType || filters.status) ? '<button class="btn btn-ghost btn-sm" onclick="clearLightFilters()">Clear filters</button>' : ''}
@@ -330,8 +346,16 @@
       `;
     }
 
+    const SORT_COMPARATORS = {
+      name: (a, b) => (a.profileName || '').localeCompare(b.profileName || '', undefined, { sensitivity: 'base' }),
+      followers: (a, b) => (b.followersCount ?? -1) - (a.followersCount ?? -1),
+      er: (a, b) => (b.engagementRate ?? -1) - (a.engagementRate ?? -1),
+      newest: (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0),
+      oldest: (a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0),
+    };
+
     function bloggerTable(list) {
-      const sorted = [...list].sort((a, b) => (a.profileName || '').localeCompare(b.profileName || '', undefined, { sensitivity: 'base' }));
+      const sorted = [...list].sort(SORT_COMPARATORS[sortBy] || SORT_COMPARATORS.name);
       return `<div class="table-scroll"><table>
         <thead><tr><th>Profile</th><th>Email</th><th>Tags</th><th>Audience</th><th>Followers</th><th>ER</th><th>Avg reach</th><th>Type</th><th>Status</th><th>Freshness</th><th>Terms / notes</th><th></th></tr></thead>
         <tbody>
