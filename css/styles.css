@@ -149,6 +149,7 @@ textarea { resize: vertical; min-height: 80px; }
 .chip { border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer; background: #fff; user-select: none; transition: all 0.15s ease; }
 .chip:hover { border-color: var(--ink-faint); }
 .chip.selected { background: var(--ink); color: #fff; border-color: var(--ink); }
+.chip-sm { padding: 3px 10px; font-size: 12px; }
 
 /* ---------- progress ---------- */
 .progress-bar { background: var(--grey-bg); border-radius: 999px; height: 7px; overflow: hidden; }

@@ -70,11 +70,15 @@ const TABLES = {
   },
   projects: {
     table: 'projects',
-    map: { id: 'id', brandId: 'brand_id', title: 'title', status: 'status', brief: 'brief', address: 'address', startDate: 'start_date', endDate: 'end_date', contentDeadline: 'content_deadline', notes: 'notes', createdAt: 'created_at' },
+    map: { id: 'id', brandId: 'brand_id', title: 'title', category: 'category', status: 'status', brief: 'brief', briefPdfLink: 'brief_pdf_link', deliverables: 'deliverables', address: 'address', startDate: 'start_date', endDate: 'end_date', contentDeadline: 'content_deadline', notes: 'notes', createdAt: 'created_at' },
+  },
+  projectChecklist: {
+    table: 'project_checklist',
+    map: { id: 'id', projectId: 'project_id', stepOrder: 'step_order', title: 'title', done: 'done', doneAt: 'done_at', createdAt: 'created_at' },
   },
   projectBloggers: {
     table: 'project_bloggers',
-    map: { id: 'id', projectId: 'project_id', bloggerId: 'blogger_id', expectedVisitDate: 'expected_visit_date', visitTrackStatus: 'visit_track_status', actualVisitDate: 'actual_visit_date', visitConfirmed: 'visit_confirmed', contentStatus: 'content_status', contentWhat: 'content_what', contentLink: 'content_link', statsRequested: 'stats_requested', statsSubmitted: 'stats_submitted', notes: 'notes', createdAt: 'created_at' },
+    map: { id: 'id', projectId: 'project_id', bloggerId: 'blogger_id', expectedVisitDate: 'expected_visit_date', visitTrackStatus: 'visit_track_status', actualVisitDate: 'actual_visit_date', visitConfirmed: 'visit_confirmed', contentStatus: 'content_status', contentFormat: 'content_format', contentLink: 'content_link', storiesLink: 'stories_link', statsRequested: 'stats_requested', statsSubmitted: 'stats_submitted', notes: 'notes', createdAt: 'created_at' },
   },
 };
 

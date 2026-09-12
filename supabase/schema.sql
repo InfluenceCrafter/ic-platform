@@ -238,10 +238,13 @@ create table if not exists blogger_directory (
 -- ============================================================
 create table if not exists projects (
   id uuid primary key default gen_random_uuid(),
-  brand_id uuid references brands(id) on delete set null,
+  brand_id uuid references brands(id) on delete set null, -- unused by the UI now; the project title itself is the brand/campaign name
   title text not null,
+  category text default '', -- free-text sphere tag, e.g. "Gastro" — optional
   status text not null default 'planning' check (status in ('planning', 'active', 'completed', 'archived')),
   brief text default '',
+  brief_pdf_link text default '', -- link to a PDF presentation (Google Drive/Dropbox), not a real file upload
+  deliverables text default '',
   address text default '',
   start_date date,
   end_date date,
@@ -249,6 +252,19 @@ create table if not exists projects (
   notes text default '',
   created_at timestamptz not null default now(),
   created_by uuid references profiles(id) default auth.uid()
+);
+
+-- Standard 9-step checklist, auto-seeded per project from a fixed template
+-- (see PROJECT_CHECKLIST_TEMPLATE in projects.html) but freely editable —
+-- steps can be checked off, removed, or added per project.
+create table if not exists project_checklist (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references projects(id) on delete cascade,
+  step_order int not null default 0,
+  title text not null,
+  done boolean not null default false,
+  done_at timestamptz,
+  created_at timestamptz not null default now()
 );
 
 create table if not exists project_bloggers (
@@ -262,8 +278,10 @@ create table if not exists project_bloggers (
   visit_confirmed boolean not null default false,
   content_status text not null default 'not_posted'
     check (content_status in ('not_posted', 'draft_submitted', 'live')),
-  content_what text default '',
-  content_link text default '',
+  content_what text default '', -- unused by the UI now, superseded by content_format
+  content_format text[] default '{}', -- e.g. {reel, stories} — what was actually posted
+  content_link text default '', -- permanent link: Reel / TikTok / Post URL
+  stories_link text default '', -- Stories vanish, so this is a Google Drive (or similar) link instead
   stats_requested boolean not null default false,
   stats_submitted boolean not null default false,
   notes text default '',
@@ -334,6 +352,7 @@ alter table notifications enable row level security;
 alter table activity_log enable row level security;
 alter table blogger_directory enable row level security;
 alter table projects enable row level security;
+alter table project_checklist enable row level security;
 alter table project_bloggers enable row level security;
 
 -- profiles
@@ -502,10 +521,13 @@ drop policy if exists "blogger_directory_all" on blogger_directory;
 create policy "blogger_directory_all" on blogger_directory for all
   using (is_admin()) with check (is_admin());
 
--- projects / project_bloggers (admin-only for now — brand and blogger
--- access is added in a later phase, once those portals exist)
+-- projects / project_checklist / project_bloggers (admin-only for now —
+-- brand and blogger access is added in a later phase, once those portals exist)
 drop policy if exists "projects_all" on projects;
 create policy "projects_all" on projects for all
+  using (is_admin()) with check (is_admin());
+drop policy if exists "project_checklist_all" on project_checklist;
+create policy "project_checklist_all" on project_checklist for all
   using (is_admin()) with check (is_admin());
 drop policy if exists "project_bloggers_all" on project_bloggers;
 create policy "project_bloggers_all" on project_bloggers for all
@@ -531,10 +553,11 @@ grant select, insert, update on
   activity_log,
   blogger_directory,
   projects,
+  project_checklist,
   project_bloggers
 to authenticated;
 
--- blogger_directory / projects / project_bloggers need delete too (admin
--- cleans up bad/duplicate entries, closed-out projects, removed rosters),
--- unlike every other table above.
-grant delete on blogger_directory, projects, project_bloggers to authenticated;
+-- blogger_directory / projects / project_checklist / project_bloggers need
+-- delete too (admin cleans up bad/duplicate entries, closed-out projects,
+-- removed rosters, removed checklist steps), unlike every other table above.
+grant delete on blogger_directory, projects, project_checklist, project_bloggers to authenticated;

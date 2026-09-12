@@ -51,6 +51,25 @@
       draft_submitted: { label: 'Draft submitted', cls: 'badge-warn' },
       live: { label: 'Live', cls: 'badge-positive' },
     };
+    /* Reel/TikTok/Post get a permanent link; Stories vanish, so they get
+       their own Google-Drive-style link field instead (see rosterRow). */
+    const CONTENT_FORMAT_OPTIONS = { reel: 'Reel', tiktok: 'TikTok', post: 'Post', stories: 'Stories' };
+
+    /* Seeded onto every new project — the standard 9-step admin workflow.
+       Freely editable afterwards (check off / remove / add custom steps),
+       so "Send brief to bloggers" etc. can just be deleted once it stops
+       being relevant (e.g. once bloggers have direct portal access). */
+    const PROJECT_CHECKLIST_TEMPLATE = [
+      'Approve campaign',
+      'Find bloggers',
+      'Prepare brief',
+      'Send brief to bloggers',
+      'Collect expected visit dates',
+      'Confirm everyone is on track',
+      'Request statistics',
+      'Log content',
+      'Prepare report',
+    ];
 
     function render() {
       const container = document.getElementById('app');
@@ -59,6 +78,9 @@
 
     function projectRoster(projectId) {
       return db.projectBloggers.filter((pb) => pb.projectId === projectId);
+    }
+    function projectChecklist(projectId) {
+      return db.projectChecklist.filter((c) => c.projectId === projectId).sort((a, b) => a.stepOrder - b.stepOrder);
     }
 
     /* ---------------- List view ---------------- */
@@ -85,7 +107,6 @@
     }
 
     function projectCard(p) {
-      const brand = db.brands.find((b) => b.id === p.brandId);
       const roster = projectRoster(p.id);
       const risk = roster.filter((r) => r.visitTrackStatus === 'at_risk' || r.visitTrackStatus === 'find_replacement').length;
       return `
@@ -94,8 +115,8 @@
             <h3 style="margin:0;">${escapeHtml(p.title)}</h3>
             ${badge(p.status)}
           </div>
-          ${brand ? `<div class="small muted" style="margin-bottom:6px;">${escapeHtml(brand.name)}</div>` : ''}
-          <div class="small muted">${p.startDate ? formatDate(p.startDate) : '—'} → ${p.endDate ? formatDate(p.endDate) : '—'}</div>
+          ${p.category ? `<span class="tag">${escapeHtml(p.category)}</span>` : ''}
+          <div class="small muted" style="margin-top:6px;">${p.startDate ? formatDate(p.startDate) : '—'} → ${p.endDate ? formatDate(p.endDate) : '—'}</div>
           <div class="small" style="margin-top:10px;">👥 ${roster.length} blogger${roster.length === 1 ? '' : 's'}${risk ? ` · <span style="color:var(--orange);font-weight:700;">${risk} need attention</span>` : ''}</div>
         </div>
       `;
@@ -109,7 +130,6 @@
     function renderProjectDetail() {
       const p = db.projects.find((x) => x.id === activeProjectId);
       if (!p) { view = 'list'; activeProjectId = null; return renderProjectList(); }
-      const brand = db.brands.find((b) => b.id === p.brandId);
       const roster = projectRoster(p.id);
 
       return `
@@ -118,7 +138,7 @@
           <div class="card-row" style="margin-bottom:4px;">
             <div>
               <h1 style="margin:0 0 4px;">${escapeHtml(p.title)}</h1>
-              <div class="small muted">${brand ? escapeHtml(brand.name) : 'No brand set'}</div>
+              ${p.category ? `<span class="tag">${escapeHtml(p.category)}</span>` : ''}
             </div>
             <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;">
               ${badge(p.status)}
@@ -131,10 +151,13 @@
             <div>
               <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Brief</div>
               <p style="white-space:pre-wrap;">${p.brief ? escapeHtml(p.brief) : '<span class="muted">No brief added yet.</span>'}</p>
+              ${p.briefPdfLink ? `<a class="small" href="${escapeHtml(p.briefPdfLink)}" target="_blank" rel="noopener">📄 Presentation (PDF)</a>` : ''}
             </div>
             <div>
               <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Address</div>
               <p>${p.address ? escapeHtml(p.address) : '<span class="muted">—</span>'}</p>
+              <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Deliverables</div>
+              <p style="white-space:pre-wrap;">${p.deliverables ? escapeHtml(p.deliverables) : '<span class="muted">—</span>'}</p>
             </div>
           </div>
           <div class="grid grid-3">
@@ -143,6 +166,7 @@
             <div><div class="small muted" style="font-weight:700;">Notes</div><div>${p.notes ? escapeHtml(p.notes) : '—'}</div></div>
           </div>
         </div>
+        ${renderChecklistCard(p)}
         <div class="card" style="cursor:pointer;" onclick="openRoster('${p.id}')">
           <div class="card-row" style="align-items:center;">
             <div>
@@ -153,6 +177,77 @@
           </div>
         </div>
       `;
+    }
+
+    /* ---------------- Tasks checklist ---------------- */
+    function renderChecklistCard(p) {
+      const items = projectChecklist(p.id);
+      const done = items.filter((i) => i.done).length;
+      return `
+        <div class="card">
+          <div class="card-row" style="align-items:center;margin-bottom:6px;">
+            <h3 style="margin:0;">Tasks <span class="muted small">(${done}/${items.length})</span></h3>
+          </div>
+          ${items
+            .map(
+              (i) => `
+            <div class="task-item">
+              <div class="task-check ${i.done ? 'done' : ''}" style="cursor:pointer;" onclick="toggleChecklistItem('${i.id}')">${i.done ? '✓' : ''}</div>
+              <div style="flex:1;${i.done ? 'text-decoration:line-through;opacity:.6;' : ''}">${escapeHtml(i.title)}</div>
+              <button class="btn btn-ghost btn-sm" onclick="removeChecklistItem('${i.id}')" title="Remove step">✕</button>
+            </div>`
+            )
+            .join('')}
+          <div class="card-row" style="margin-top:12px;gap:8px;">
+            <input id="new-checklist-item" placeholder="Add a step…" style="flex:1;" onkeydown="if(event.key==='Enter') addChecklistItem('${p.id}')" />
+            <button class="btn btn-secondary btn-sm" onclick="addChecklistItem('${p.id}')">+ Add</button>
+          </div>
+        </div>
+      `;
+    }
+
+    async function toggleChecklistItem(itemId) {
+      try {
+        const item = db.projectChecklist.find((x) => x.id === itemId);
+        if (!item) return;
+        const done = !item.done;
+        item.done = done;
+        item.doneAt = done ? nowISO() : null;
+        await dbUpdate('projectChecklist', itemId, { done, doneAt: item.doneAt });
+      } catch (err) {
+        console.error('toggleChecklistItem failed:', err);
+        toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        render();
+      }
+    }
+
+    async function addChecklistItem(projectId) {
+      const input = document.getElementById('new-checklist-item');
+      const title = (input && input.value || '').trim();
+      if (!title) return;
+      try {
+        const stepOrder = projectChecklist(projectId).length;
+        const row = await dbInsert('projectChecklist', { projectId, stepOrder, title, done: false, doneAt: null, createdAt: nowISO() });
+        db.projectChecklist.push(row);
+      } catch (err) {
+        console.error('addChecklistItem failed:', err);
+        toast('Could not add step: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        render();
+      }
+    }
+
+    async function removeChecklistItem(itemId) {
+      try {
+        await dbDelete('projectChecklist', itemId);
+        db.projectChecklist = db.projectChecklist.filter((x) => x.id !== itemId);
+      } catch (err) {
+        console.error('removeChecklistItem failed:', err);
+        toast('Could not remove step: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        render();
+      }
     }
 
     function rosterQuickSummary(roster) {
@@ -227,12 +322,20 @@
               <span class="small">Visit happened</span>
             </label>
           </td>
-          <td style="min-width:230px;">
+          <td style="min-width:250px;">
             <select onchange="updateRoster('${pb.id}','contentStatus',this.value)" style="margin-bottom:6px;">
               ${Object.entries(CONTENT_STATUS_META).map(([k, m]) => `<option value="${k}" ${pb.contentStatus === k ? 'selected' : ''}>${m.label}</option>`).join('')}
             </select>
-            <input placeholder="What was posted (e.g. Reel + 2 Stories)" value="${escapeHtml(pb.contentWhat || '')}" onchange="updateRoster('${pb.id}','contentWhat',this.value)" style="margin-bottom:6px;" />
-            <input placeholder="Content link" value="${escapeHtml(pb.contentLink || '')}" onchange="updateRoster('${pb.id}','contentLink',this.value)" />
+            <div class="chip-select" style="margin-bottom:6px;">
+              ${Object.entries(CONTENT_FORMAT_OPTIONS)
+                .map(
+                  ([k, label]) =>
+                    `<div class="chip chip-sm ${(pb.contentFormat || []).includes(k) ? 'selected' : ''}" onclick="toggleContentFormat('${pb.id}','${k}')">${label}</div>`
+                )
+                .join('')}
+            </div>
+            <input placeholder="Content link (Reel / TikTok / Post)" value="${escapeHtml(pb.contentLink || '')}" onchange="updateRoster('${pb.id}','contentLink',this.value)" style="margin-bottom:6px;" />
+            <input placeholder="Stories link (Google Drive)" value="${escapeHtml(pb.storiesLink || '')}" onchange="updateRoster('${pb.id}','storiesLink',this.value)" />
           </td>
           <td style="min-width:130px;">
             <label class="checkbox-row"><input type="checkbox" ${pb.statsRequested ? 'checked' : ''} onchange="updateRoster('${pb.id}','statsRequested',this.checked)" /><span class="small">Requested</span></label>
@@ -255,6 +358,22 @@
         await dbUpdate('projectBloggers', pbId, { [field]: value });
       } catch (err) {
         console.error('updateRoster failed:', err);
+        toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        renderRosterAndRefresh();
+      }
+    }
+
+    async function toggleContentFormat(pbId, format) {
+      try {
+        const pb = db.projectBloggers.find((x) => x.id === pbId);
+        if (!pb) return;
+        const current = pb.contentFormat || [];
+        const next = current.includes(format) ? current.filter((f) => f !== format) : [...current, format];
+        pb.contentFormat = next;
+        await dbUpdate('projectBloggers', pbId, { contentFormat: next });
+      } catch (err) {
+        console.error('toggleContentFormat failed:', err);
         toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
       } finally {
         renderRosterAndRefresh();
@@ -327,8 +446,9 @@
           actualVisitDate: null,
           visitConfirmed: false,
           contentStatus: 'not_posted',
-          contentWhat: '',
+          contentFormat: [],
           contentLink: '',
+          storiesLink: '',
           statsRequested: false,
           statsSubmitted: false,
           notes: '',
@@ -354,17 +474,18 @@
             <h2 style="margin-top:0;">${p ? 'Edit project' : 'New project'}</h2>
             <label>Title</label>
             <input id="p-title" value="${p ? escapeHtml(p.title) : ''}" placeholder="e.g. Bowlers brunch" />
-            <label>Brand</label>
-            <select id="p-brand">
-              <option value="">No brand</option>
-              ${db.brands.map((b) => `<option value="${b.id}" ${p && p.brandId === b.id ? 'selected' : ''}>${escapeHtml(b.name)}</option>`).join('')}
-            </select>
+            <label>Category <span class="muted small">(optional)</span></label>
+            <input id="p-category" value="${p ? escapeHtml(p.category || '') : ''}" placeholder="e.g. Gastro" />
             <label>Status</label>
             <select id="p-status">
               ${Object.entries(PROJECT_STATUS_OPTIONS).map(([k, v]) => `<option value="${k}" ${(p ? p.status : 'planning') === k ? 'selected' : ''}>${v}</option>`).join('')}
             </select>
             <label>Brief</label>
-            <textarea id="p-brief" placeholder="Concept, deliverables, what's expected...">${p ? escapeHtml(p.brief || '') : ''}</textarea>
+            <textarea id="p-brief" placeholder="Concept, what's expected...">${p ? escapeHtml(p.brief || '') : ''}</textarea>
+            <label>Brief PDF link <span class="muted small">(Google Drive, Dropbox…)</span></label>
+            <input id="p-brief-pdf" value="${p ? escapeHtml(p.briefPdfLink || '') : ''}" placeholder="https://drive.google.com/..." />
+            <label>Deliverables</label>
+            <textarea id="p-deliverables" placeholder="e.g. 1 Reel + 3 Stories per blogger">${p ? escapeHtml(p.deliverables || '') : ''}</textarea>
             <label>Address</label>
             <input id="p-address" value="${p ? escapeHtml(p.address || '') : ''}" placeholder="Venue address" />
             <div class="grid grid-2">
@@ -385,9 +506,11 @@
     function readProjectForm() {
       return {
         title: document.getElementById('p-title').value.trim(),
-        brandId: document.getElementById('p-brand').value || null,
+        category: document.getElementById('p-category').value.trim(),
         status: document.getElementById('p-status').value,
         brief: document.getElementById('p-brief').value.trim(),
+        briefPdfLink: document.getElementById('p-brief-pdf').value.trim(),
+        deliverables: document.getElementById('p-deliverables').value.trim(),
         address: document.getElementById('p-address').value.trim(),
         startDate: document.getElementById('p-start').value || null,
         endDate: document.getElementById('p-end').value || null,
@@ -408,6 +531,18 @@
         } else {
           const row = await dbInsert('projects', { ...fields, createdAt: nowISO() });
           db.projects.push(row);
+          const checklistRows = await dbInsertMany(
+            'projectChecklist',
+            PROJECT_CHECKLIST_TEMPLATE.map((title, i) => ({
+              projectId: row.id,
+              stepOrder: i,
+              title,
+              done: false,
+              doneAt: null,
+              createdAt: nowISO(),
+            }))
+          );
+          db.projectChecklist.push(...checklistRows);
           toast('Project created.');
         }
       } catch (err) {
@@ -425,6 +560,7 @@
         await dbDelete('projects', id);
         db.projects = db.projects.filter((x) => x.id !== id);
         db.projectBloggers = db.projectBloggers.filter((x) => x.projectId !== id);
+        db.projectChecklist = db.projectChecklist.filter((x) => x.projectId !== id);
         toast('Project deleted.');
       } catch (err) {
         console.error('deleteProject failed:', err);
