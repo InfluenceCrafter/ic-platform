@@ -282,6 +282,7 @@ create table if not exists project_bloggers (
   content_format text[] default '{}', -- e.g. {reel, stories} — what was actually posted
   content_link text default '', -- permanent link: Reel / TikTok / Post URL
   stories_link text default '', -- Stories vanish, so this is a Google Drive (or similar) link instead
+  group_label text default '', -- free-form grouping within a project, e.g. "New", "Returning", "Food bloggers", "Event"
   stats_requested boolean not null default false,
   stats_submitted boolean not null default false,
   notes text default '',

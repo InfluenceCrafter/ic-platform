@@ -29,6 +29,13 @@
     let view = 'list'; // 'list' | 'detail'
     let activeProjectId = null;
     let projectStatusFilter = '';
+    let rosterGroupFilter = ''; // filters the open roster drawer's table by group_label
+
+    /* State for the "Add blogger to project" modal's filters — reset each
+       time the modal opens (see openAddBloggerModal). */
+    let addBloggerCityFilter = '';
+    let addBloggerHistoryFilter = ''; // '' | 'new' | 'returning'
+    let addBloggerSortBy = 'name'; // 'name' | 'followers'
 
     (async function () {
       const ctx = await requireRole(['admin']);
@@ -54,6 +61,11 @@
     /* Reel/TikTok/Post get a permanent link; Stories vanish, so they get
        their own Google-Drive-style link field instead (see rosterRow). */
     const CONTENT_FORMAT_OPTIONS = { reel: 'Reel', tiktok: 'TikTok', post: 'Post', stories: 'Stories' };
+
+    /* Just starter suggestions in the group input's datalist — free text,
+       so any custom group name typed once becomes reusable (same pattern
+       as the "Other" nationality field in blogger-database.html). */
+    const GROUP_PRESETS = ['New', 'Returning', 'Food bloggers', 'Event bloggers'];
 
     /* Seeded onto every new project — the standard 9-step admin workflow.
        Freely editable afterwards (check off / remove / add custom steps),
@@ -81,6 +93,23 @@
     }
     function projectChecklist(projectId) {
       return db.projectChecklist.filter((c) => c.projectId === projectId).sort((a, b) => a.stepOrder - b.stepOrder);
+    }
+
+    /* Every OTHER project this blogger has already been added to — lets the
+       admin tell new vs. returning bloggers apart when building a roster. */
+    function bloggerProjectHistory(bloggerId, excludeProjectId) {
+      return db.projectBloggers
+        .filter((pb) => pb.bloggerId === bloggerId && pb.projectId !== excludeProjectId)
+        .map((pb) => db.projects.find((p) => p.id === pb.projectId))
+        .filter(Boolean);
+    }
+
+    /* Distinct group_label values already used within one project, for the
+       roster's filter chips + the group input's datalist. */
+    function projectGroupValues(projectId) {
+      const set = new Set();
+      projectRoster(projectId).forEach((pb) => { if (pb.groupLabel) set.add(pb.groupLabel); });
+      return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
     }
 
     /* ---------------- List view ---------------- */
@@ -263,9 +292,11 @@
 
     /* ---------------- Roster drawer ("half tab") ---------------- */
     function openRoster(projectId) {
+      if (activeProjectId !== projectId) rosterGroupFilter = '';
       activeProjectId = projectId;
       document.getElementById('drawer-root').innerHTML = renderRosterDrawer(projectId);
     }
+    function setRosterGroupFilter(group) { rosterGroupFilter = group; renderRosterAndRefresh(); }
     function closeRoster() { document.getElementById('drawer-root').innerHTML = ''; render(); }
     function renderRosterAndRefresh() {
       const el = document.getElementById('drawer-root');
@@ -275,6 +306,9 @@
     function renderRosterDrawer(projectId) {
       const p = db.projects.find((x) => x.id === projectId);
       const roster = projectRoster(projectId);
+      const groups = projectGroupValues(projectId);
+      const visibleRoster = rosterGroupFilter ? roster.filter((r) => (r.groupLabel || '') === rosterGroupFilter) : roster;
+      const datalistOptions = [...GROUP_PRESETS, ...groups].filter((v, i, a) => a.indexOf(v) === i);
       return `
         <div class="drawer-backdrop" onclick="if(event.target===this) closeRoster()">
           <div class="drawer">
@@ -282,18 +316,31 @@
             <h2 style="margin:0 0 2px;">Bloggers — ${escapeHtml(p.title)}</h2>
             <p class="small muted" style="margin-bottom:18px;">${roster.length} added</p>
             <button class="btn btn-primary btn-sm" style="margin-bottom:16px;" onclick="openAddBloggerModal('${projectId}')">+ Add blogger from database</button>
+            ${groups.length
+              ? `<div class="chip-select" style="margin-bottom:14px;">
+                  <div class="chip ${!rosterGroupFilter ? 'selected' : ''}" onclick="setRosterGroupFilter('')">All (${roster.length})</div>
+                  ${groups
+                    .map((g) => {
+                      const count = roster.filter((r) => r.groupLabel === g).length;
+                      return `<div class="chip ${rosterGroupFilter === g ? 'selected' : ''}" data-group="${escapeHtml(g)}" onclick="setRosterGroupFilter(this.dataset.group)">${escapeHtml(g)} (${count})</div>`;
+                    })
+                    .join('')}
+                </div>`
+              : ''}
+            <datalist id="group-suggestions">${datalistOptions.map((g) => `<option value="${escapeHtml(g)}"></option>`).join('')}</datalist>
             ${roster.length === 0
               ? `<div class="empty-state"><p>No bloggers added to this project yet.</p></div>`
               : `<div class="table-wrap"><table>
                   <thead><tr>
                     <th>Blogger</th>
+                    <th>Group</th>
                     <th>Expected visit</th>
                     <th>Actual visit</th>
                     <th>Content</th>
                     <th>Stats</th>
                     <th></th>
                   </tr></thead>
-                  <tbody>${roster.map(rosterRow).join('')}</tbody>
+                  <tbody>${visibleRoster.map(rosterRow).join('')}</tbody>
                 </table></div>`}
           </div>
         </div>
@@ -308,6 +355,9 @@
           <td style="min-width:150px;">
             <div style="font-weight:600;">${escapeHtml(name)}</div>
             ${b && b.instagramUrl ? `<a class="small" href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener">Instagram</a>` : ''}
+          </td>
+          <td style="min-width:130px;">
+            <input list="group-suggestions" value="${escapeHtml(pb.groupLabel || '')}" onchange="updateRoster('${pb.id}','groupLabel',this.value)" placeholder="e.g. New, Food" />
           </td>
           <td style="min-width:190px;">
             <input type="date" value="${pb.expectedVisitDate || ''}" onchange="updateRoster('${pb.id}','expectedVisitDate',this.value)" style="margin-bottom:6px;" />
@@ -396,12 +446,31 @@
 
     /* ---------------- Add blogger to project (from directory) ---------------- */
     function openAddBloggerModal(projectId) {
+      addBloggerCityFilter = '';
+      addBloggerHistoryFilter = '';
+      addBloggerSortBy = 'name';
+      const cities = addBloggerCityOptions();
       document.getElementById('modal-root').innerHTML = `
         <div class="modal-backdrop" onclick="if(event.target===this) closeAddBloggerModal()">
           <div class="modal" style="max-width:640px;">
             <button class="modal-close" onclick="closeAddBloggerModal()">✕</button>
             <h2 style="margin-top:0;">Add blogger to project</h2>
-            <input id="add-blogger-search" placeholder="Search by name, handle, city…" oninput="renderAddBloggerResults('${projectId}')" style="margin-bottom:14px;" />
+            <input id="add-blogger-search" placeholder="Search by name, handle, city…" oninput="renderAddBloggerResults('${projectId}')" style="margin-bottom:10px;" />
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+              <select id="add-blogger-city" style="width:auto;" onchange="onAddBloggerFilterChange('${projectId}')">
+                <option value="">All cities</option>
+                ${cities.map((c) => `<option value="${escapeHtml(c.toLowerCase())}">${escapeHtml(c)}</option>`).join('')}
+              </select>
+              <select id="add-blogger-history" style="width:auto;" onchange="onAddBloggerFilterChange('${projectId}')">
+                <option value="">New &amp; returning</option>
+                <option value="new">🆕 New only</option>
+                <option value="returning">Returning only</option>
+              </select>
+              <select id="add-blogger-sort" style="width:auto;" onchange="onAddBloggerFilterChange('${projectId}')">
+                <option value="name">Alphabetical</option>
+                <option value="followers">Followers (high→low)</option>
+              </select>
+            </div>
             <div id="add-blogger-results"></div>
           </div>
         </div>
@@ -411,28 +480,55 @@
     }
     function closeAddBloggerModal() { document.getElementById('modal-root').innerHTML = ''; }
 
+    function addBloggerCityOptions() {
+      const set = new Set();
+      db.bloggerDirectory.forEach((b) => { if (b.city && b.city.trim()) set.add(b.city.trim()); });
+      return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }
+
+    function onAddBloggerFilterChange(projectId) {
+      addBloggerCityFilter = document.getElementById('add-blogger-city').value;
+      addBloggerHistoryFilter = document.getElementById('add-blogger-history').value;
+      addBloggerSortBy = document.getElementById('add-blogger-sort').value;
+      renderAddBloggerResults(projectId);
+    }
+
     function renderAddBloggerResults(projectId) {
       const q = (document.getElementById('add-blogger-search').value || '').trim().toLowerCase();
       const already = new Set(projectRoster(projectId).map((pb) => pb.bloggerId));
-      const results = db.bloggerDirectory
+      let results = db.bloggerDirectory
         .filter((b) => !already.has(b.id))
         .filter((b) => !q || `${b.profileName || ''} ${b.instagramUrl || ''} ${b.city || ''}`.toLowerCase().includes(q))
-        .sort((a, b) => (a.profileName || '').localeCompare(b.profileName || '', undefined, { sensitivity: 'base' }))
-        .slice(0, 40);
+        .filter((b) => !addBloggerCityFilter || (b.city || '').trim().toLowerCase() === addBloggerCityFilter)
+        .map((b) => ({ blogger: b, history: bloggerProjectHistory(b.id, projectId) }));
+
+      if (addBloggerHistoryFilter === 'new') results = results.filter((r) => r.history.length === 0);
+      if (addBloggerHistoryFilter === 'returning') results = results.filter((r) => r.history.length > 0);
+
+      results.sort((a, b) =>
+        addBloggerSortBy === 'followers'
+          ? (Number(b.blogger.followersCount) || 0) - (Number(a.blogger.followersCount) || 0)
+          : (a.blogger.profileName || '').localeCompare(b.blogger.profileName || '', undefined, { sensitivity: 'base' })
+      );
+      results = results.slice(0, 40);
+
       const el = document.getElementById('add-blogger-results');
       el.innerHTML = results.length === 0
         ? `<p class="muted small">No matching bloggers.</p>`
         : results
-            .map(
-              (b) => `
+            .map(({ blogger: b, history }) => `
         <div class="card-row" style="padding:9px 0;border-bottom:1px solid var(--line-soft);align-items:center;">
           <div>
             <div style="font-weight:600;">${escapeHtml(b.profileName || 'Untitled blogger')}</div>
             <div class="small muted">${escapeHtml(b.city || '')}${b.followersCount != null ? ' · ' + Number(b.followersCount).toLocaleString() + ' followers' : ''}</div>
+            <div class="small" style="margin-top:3px;">${
+              history.length === 0
+                ? `<span class="badge badge-positive">🆕 New</span>`
+                : `<span class="badge badge-neutral" title="${escapeHtml(history.map((p) => p.title).join(', '))}">Worked on ${history.length} project${history.length === 1 ? '' : 's'}: ${escapeHtml(history.map((p) => p.title).slice(0, 2).join(', '))}${history.length > 2 ? '…' : ''}</span>`
+            }</div>
           </div>
           <button class="btn btn-secondary btn-sm" onclick="addBloggerToProject('${projectId}','${b.id}')">+ Add</button>
-        </div>`
-            )
+        </div>`)
             .join('');
     }
 
@@ -449,6 +545,7 @@
           contentFormat: [],
           contentLink: '',
           storiesLink: '',
+          groupLabel: '',
           statsRequested: false,
           statsSubmitted: false,
           notes: '',
