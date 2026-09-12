@@ -280,7 +280,8 @@ create table if not exists project_bloggers (
     check (content_status in ('not_posted', 'draft_submitted', 'live')),
   content_what text default '', -- unused by the UI now, superseded by content_format
   content_format text[] default '{}', -- e.g. {reel, stories} — what was actually posted
-  content_link text default '', -- permanent link: Reel / TikTok / Post URL
+  content_link text default '', -- unused by the UI now, superseded by content_links (one link per format)
+  content_links jsonb default '{}', -- { reel: url, tiktok: url, post: url } — one field per selected format
   stories_link text default '', -- Stories vanish, so this is a Google Drive (or similar) link instead
   group_label text default '', -- free-form grouping within a project, e.g. "New", "Returning", "Food bloggers", "Event"
   stats_requested boolean not null default false,

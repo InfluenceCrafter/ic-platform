@@ -58,8 +58,9 @@
       draft_submitted: { label: 'Draft submitted', cls: 'badge-warn' },
       live: { label: 'Live', cls: 'badge-positive' },
     };
-    /* Reel/TikTok/Post get a permanent link; Stories vanish, so they get
-       their own Google-Drive-style link field instead (see rosterRow). */
+    /* Reel/TikTok/Post each get their own permanent link (see contentLinks
+       jsonb + updateContentLink); Stories vanish, so they get their own
+       Google-Drive-style link field instead (see rosterCard). */
     const CONTENT_FORMAT_OPTIONS = { reel: 'Reel', tiktok: 'TikTok', post: 'Post', stories: 'Stories' };
 
     /* Just starter suggestions in the group input's datalist — free text,
@@ -303,12 +304,29 @@
       if (el.innerHTML) el.innerHTML = renderRosterDrawer(activeProjectId);
     }
 
+    /* Clusters the (possibly group-filtered) roster into ordered sections —
+       named groups alphabetically first, "Ungrouped" last — so bloggers in
+       the same group always render together instead of scattered through
+       an alphabetical table. */
+    function groupedRoster(projectId) {
+      const roster = projectRoster(projectId);
+      const visible = rosterGroupFilter ? roster.filter((r) => (r.groupLabel || '') === rosterGroupFilter) : roster;
+      const buckets = {};
+      visible.forEach((pb) => {
+        const key = pb.groupLabel || '';
+        (buckets[key] = buckets[key] || []).push(pb);
+      });
+      const namedKeys = Object.keys(buckets).filter((k) => k !== '').sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+      const orderedKeys = buckets[''] ? [...namedKeys, ''] : namedKeys;
+      return orderedKeys.map((key) => ({ key, label: key || 'Ungrouped', bloggers: buckets[key] }));
+    }
+
     function renderRosterDrawer(projectId) {
       const p = db.projects.find((x) => x.id === projectId);
       const roster = projectRoster(projectId);
       const groups = projectGroupValues(projectId);
-      const visibleRoster = rosterGroupFilter ? roster.filter((r) => (r.groupLabel || '') === rosterGroupFilter) : roster;
       const datalistOptions = [...GROUP_PRESETS, ...groups].filter((v, i, a) => a.indexOf(v) === i);
+      const sections = groupedRoster(projectId);
       return `
         <div class="drawer-backdrop" onclick="if(event.target===this) closeRoster()">
           <div class="drawer">
@@ -317,7 +335,7 @@
             <p class="small muted" style="margin-bottom:18px;">${roster.length} added</p>
             <button class="btn btn-primary btn-sm" style="margin-bottom:16px;" onclick="openAddBloggerModal('${projectId}')">+ Add blogger from database</button>
             ${groups.length
-              ? `<div class="chip-select" style="margin-bottom:14px;">
+              ? `<div class="chip-select" style="margin-bottom:18px;">
                   <div class="chip ${!rosterGroupFilter ? 'selected' : ''}" onclick="setRosterGroupFilter('')">All (${roster.length})</div>
                   ${groups
                     .map((g) => {
@@ -330,69 +348,90 @@
             <datalist id="group-suggestions">${datalistOptions.map((g) => `<option value="${escapeHtml(g)}"></option>`).join('')}</datalist>
             ${roster.length === 0
               ? `<div class="empty-state"><p>No bloggers added to this project yet.</p></div>`
-              : `<div class="table-wrap"><table>
-                  <thead><tr>
-                    <th>Blogger</th>
-                    <th>Group</th>
-                    <th>Expected visit</th>
-                    <th>Actual visit</th>
-                    <th>Content</th>
-                    <th>Stats</th>
-                    <th></th>
-                  </tr></thead>
-                  <tbody>${visibleRoster.map(rosterRow).join('')}</tbody>
-                </table></div>`}
+              : sections
+                  .map(
+                    (section) => `
+                <div class="roster-group">
+                  ${sections.length > 1 || section.key !== ''
+                    ? `<div class="roster-group-title">${escapeHtml(section.label)} <span class="count">(${section.bloggers.length})</span></div>`
+                    : ''}
+                  <div class="roster-cards">${section.bloggers.map(rosterCard).join('')}</div>
+                </div>`
+                  )
+                  .join('')}
           </div>
         </div>
       `;
     }
 
-    function rosterRow(pb) {
+    function rosterCard(pb) {
       const b = db.bloggerDirectory.find((x) => x.id === pb.bloggerId);
       const name = b ? (b.profileName || 'Untitled blogger') : 'Blogger removed from database';
+      const formats = pb.contentFormat || [];
+      const links = pb.contentLinks || {};
+      const linkFormats = formats.filter((f) => f !== 'stories');
+      const hasAnyLinkField = linkFormats.length > 0 || formats.includes('stories');
       return `
-        <tr>
-          <td style="min-width:150px;">
-            <div style="font-weight:600;">${escapeHtml(name)}</div>
-            ${b && b.instagramUrl ? `<a class="small" href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener">Instagram</a>` : ''}
-          </td>
-          <td style="min-width:130px;">
-            <input list="group-suggestions" value="${escapeHtml(pb.groupLabel || '')}" onchange="updateRoster('${pb.id}','groupLabel',this.value)" placeholder="e.g. New, Food" />
-          </td>
-          <td style="min-width:190px;">
-            <input type="date" value="${pb.expectedVisitDate || ''}" onchange="updateRoster('${pb.id}','expectedVisitDate',this.value)" style="margin-bottom:6px;" />
-            <select onchange="updateRoster('${pb.id}','visitTrackStatus',this.value)">
-              ${Object.entries(TRACK_STATUS_META).map(([k, m]) => `<option value="${k}" ${pb.visitTrackStatus === k ? 'selected' : ''}>${m.label}</option>`).join('')}
-            </select>
-          </td>
-          <td style="min-width:170px;">
-            <input type="date" value="${pb.actualVisitDate || ''}" onchange="updateRoster('${pb.id}','actualVisitDate',this.value)" style="margin-bottom:6px;" />
-            <label class="checkbox-row" style="margin:0;">
-              <input type="checkbox" ${pb.visitConfirmed ? 'checked' : ''} onchange="updateRoster('${pb.id}','visitConfirmed',this.checked)" />
-              <span class="small">Visit happened</span>
-            </label>
-          </td>
-          <td style="min-width:250px;">
-            <select onchange="updateRoster('${pb.id}','contentStatus',this.value)" style="margin-bottom:6px;">
-              ${Object.entries(CONTENT_STATUS_META).map(([k, m]) => `<option value="${k}" ${pb.contentStatus === k ? 'selected' : ''}>${m.label}</option>`).join('')}
-            </select>
-            <div class="chip-select" style="margin-bottom:6px;">
-              ${Object.entries(CONTENT_FORMAT_OPTIONS)
-                .map(
-                  ([k, label]) =>
-                    `<div class="chip chip-sm ${(pb.contentFormat || []).includes(k) ? 'selected' : ''}" onclick="toggleContentFormat('${pb.id}','${k}')">${label}</div>`
-                )
-                .join('')}
+        <div class="roster-card">
+          <div class="roster-card-top">
+            <div>
+              <div class="roster-card-name">${escapeHtml(name)}</div>
+              ${b && b.instagramUrl ? `<a class="small" href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener">Instagram ↗</a>` : '<span class="small muted">Blogger removed from database</span>'}
             </div>
-            <input placeholder="Content link (Reel / TikTok / Post)" value="${escapeHtml(pb.contentLink || '')}" onchange="updateRoster('${pb.id}','contentLink',this.value)" style="margin-bottom:6px;" />
-            <input placeholder="Stories link (Google Drive)" value="${escapeHtml(pb.storiesLink || '')}" onchange="updateRoster('${pb.id}','storiesLink',this.value)" />
-          </td>
-          <td style="min-width:130px;">
-            <label class="checkbox-row"><input type="checkbox" ${pb.statsRequested ? 'checked' : ''} onchange="updateRoster('${pb.id}','statsRequested',this.checked)" /><span class="small">Requested</span></label>
-            <label class="checkbox-row"><input type="checkbox" ${pb.statsSubmitted ? 'checked' : ''} onchange="updateRoster('${pb.id}','statsSubmitted',this.checked)" /><span class="small">Submitted</span></label>
-          </td>
-          <td><button class="btn btn-ghost btn-sm" onclick="removeFromRoster('${pb.id}')" title="Remove from project">✕</button></td>
-        </tr>
+            <div class="roster-card-top-right">
+              <input class="roster-group-input" list="group-suggestions" value="${escapeHtml(pb.groupLabel || '')}" onchange="updateRoster('${pb.id}','groupLabel',this.value)" placeholder="Group…" />
+              <button class="btn btn-ghost btn-sm" onclick="removeFromRoster('${pb.id}')" title="Remove from project">✕</button>
+            </div>
+          </div>
+          <div class="roster-card-grid">
+            <div class="roster-field">
+              <div class="roster-field-label">Visit</div>
+              <select onchange="updateRoster('${pb.id}','visitTrackStatus',this.value)">
+                ${Object.entries(TRACK_STATUS_META).map(([k, m]) => `<option value="${k}" ${pb.visitTrackStatus === k ? 'selected' : ''}>${m.label}</option>`).join('')}
+              </select>
+              <div class="roster-date-row">
+                <input type="date" value="${pb.expectedVisitDate || ''}" onchange="updateRoster('${pb.id}','expectedVisitDate',this.value)" title="Expected visit date" />
+                <input type="date" value="${pb.actualVisitDate || ''}" onchange="updateRoster('${pb.id}','actualVisitDate',this.value)" title="Actual visit date" />
+              </div>
+              <div class="toggle-pill ${pb.visitConfirmed ? 'on' : ''}" onclick="toggleBoolField('${pb.id}','visitConfirmed')"><span class="dot"></span>Visit happened</div>
+            </div>
+            <div class="roster-field">
+              <div class="roster-field-label">Content</div>
+              <select onchange="updateRoster('${pb.id}','contentStatus',this.value)">
+                ${Object.entries(CONTENT_STATUS_META).map(([k, m]) => `<option value="${k}" ${pb.contentStatus === k ? 'selected' : ''}>${m.label}</option>`).join('')}
+              </select>
+              <div class="chip-select" style="margin:7px 0 8px;">
+                ${Object.entries(CONTENT_FORMAT_OPTIONS)
+                  .map(([k, label]) => `<div class="chip chip-sm ${formats.includes(k) ? 'selected' : ''}" onclick="toggleContentFormat('${pb.id}','${k}')">${label}</div>`)
+                  .join('')}
+              </div>
+              ${!hasAnyLinkField
+                ? `<div class="roster-no-links">Select a format above to add its link</div>`
+                : `${linkFormats
+                    .map(
+                      (f) => `
+                <div class="content-link-row">
+                  <span class="format-tag">${CONTENT_FORMAT_OPTIONS[f]}</span>
+                  <input placeholder="${CONTENT_FORMAT_OPTIONS[f]} link" value="${escapeHtml(links[f] || '')}" onchange="updateContentLink('${pb.id}','${f}',this.value)" />
+                </div>`
+                    )
+                    .join('')}${
+                    formats.includes('stories')
+                      ? `
+                <div class="content-link-row">
+                  <span class="format-tag">Stories</span>
+                  <input placeholder="Google Drive link" value="${escapeHtml(pb.storiesLink || '')}" onchange="updateRoster('${pb.id}','storiesLink',this.value)" />
+                </div>`
+                      : ''
+                  }`}
+            </div>
+            <div class="roster-field">
+              <div class="roster-field-label">Stats</div>
+              <div class="toggle-pill ${pb.statsRequested ? 'on' : ''}" onclick="toggleBoolField('${pb.id}','statsRequested')"><span class="dot"></span>Requested</div>
+              <div class="toggle-pill ${pb.statsSubmitted ? 'on' : ''}" onclick="toggleBoolField('${pb.id}','statsSubmitted')"><span class="dot"></span>Submitted</div>
+            </div>
+          </div>
+        </div>
       `;
     }
 
@@ -424,6 +463,41 @@
         await dbUpdate('projectBloggers', pbId, { contentFormat: next });
       } catch (err) {
         console.error('toggleContentFormat failed:', err);
+        toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        renderRosterAndRefresh();
+      }
+    }
+
+    /* Used by the Visit happened / Requested / Submitted pill toggles —
+       same save-then-always-rerender contract as updateRoster. */
+    async function toggleBoolField(pbId, field) {
+      try {
+        const pb = db.projectBloggers.find((x) => x.id === pbId);
+        if (!pb) return;
+        const next = !pb[field];
+        pb[field] = next;
+        await dbUpdate('projectBloggers', pbId, { [field]: next });
+      } catch (err) {
+        console.error('toggleBoolField failed:', err);
+        toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        renderRosterAndRefresh();
+      }
+    }
+
+    /* One link per selected format (Reel/TikTok/Post can each have their
+       own permanent link) — stored as a single jsonb object keyed by
+       format so picking both Reel and TikTok shows two separate fields. */
+    async function updateContentLink(pbId, format, value) {
+      try {
+        const pb = db.projectBloggers.find((x) => x.id === pbId);
+        if (!pb) return;
+        const links = { ...(pb.contentLinks || {}), [format]: value };
+        pb.contentLinks = links;
+        await dbUpdate('projectBloggers', pbId, { contentLinks: links });
+      } catch (err) {
+        console.error('updateContentLink failed:', err);
         toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
       } finally {
         renderRosterAndRefresh();
@@ -543,7 +617,7 @@
           visitConfirmed: false,
           contentStatus: 'not_posted',
           contentFormat: [],
-          contentLink: '',
+          contentLinks: {},
           storiesLink: '',
           groupLabel: '',
           statsRequested: false,

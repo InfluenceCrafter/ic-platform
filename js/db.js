@@ -78,7 +78,7 @@ const TABLES = {
   },
   projectBloggers: {
     table: 'project_bloggers',
-    map: { id: 'id', projectId: 'project_id', bloggerId: 'blogger_id', expectedVisitDate: 'expected_visit_date', visitTrackStatus: 'visit_track_status', actualVisitDate: 'actual_visit_date', visitConfirmed: 'visit_confirmed', contentStatus: 'content_status', contentFormat: 'content_format', contentLink: 'content_link', storiesLink: 'stories_link', groupLabel: 'group_label', statsRequested: 'stats_requested', statsSubmitted: 'stats_submitted', notes: 'notes', createdAt: 'created_at' },
+    map: { id: 'id', projectId: 'project_id', bloggerId: 'blogger_id', expectedVisitDate: 'expected_visit_date', visitTrackStatus: 'visit_track_status', actualVisitDate: 'actual_visit_date', visitConfirmed: 'visit_confirmed', contentStatus: 'content_status', contentFormat: 'content_format', contentLinks: 'content_links', storiesLink: 'stories_link', groupLabel: 'group_label', statsRequested: 'stats_requested', statsSubmitted: 'stats_submitted', notes: 'notes', createdAt: 'created_at' },
   },
 };
 
