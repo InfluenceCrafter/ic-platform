@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Projects — InfluenceCrafter Creator Hub</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body class="wide-page">
+  <nav id="nav"></nav>
+  <div class="page" id="app"></div>
+  <div id="modal-root"></div>
+  <div id="drawer-root"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.8/dist/umd/supabase.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script src="js/db.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/ui.js"></script>
+  <script>
+    let db, user;
+
+    /* Admin-only internal collaboration tracker. Distinct from the public
+       campaign marketplace (opportunities.html/collaboration.html) where
+       creators apply and get reviewed — here the admin adds bloggers
+       straight from the Blogger Database and tracks progress by hand.
+       Phase 1 (this file): admin view only. Brand + blogger portal access
+       to a read/limited-write slice of this data is a later phase. */
+    let view = 'list'; // 'list' | 'detail'
+    let activeProjectId = null;
+    let projectStatusFilter = '';
+
+    (async function () {
+      const ctx = await requireRole(['admin']);
+      if (ctx) { db = ctx.db; user = ctx.user; renderNav('projects.html', db, user); render(); }
+    })();
+
+    async function reload() { db = await loadDB(); }
+
+    const PROJECT_STATUS_OPTIONS = { planning: 'Planning', active: 'Active', completed: 'Completed', archived: 'Archived' };
+
+    /* Kept local (not in js/ui.js's shared STATUS_LABELS) because these are
+       severity signals with specific colors, not generic status labels. */
+    const TRACK_STATUS_META = {
+      on_track: { label: 'On track', cls: 'badge-positive' },
+      at_risk: { label: 'At risk', cls: 'badge-warn' },
+      find_replacement: { label: 'Find replacement', cls: 'badge-negative' },
+    };
+    const CONTENT_STATUS_META = {
+      not_posted: { label: 'Not posted', cls: 'badge-neutral' },
+      draft_submitted: { label: 'Draft submitted', cls: 'badge-warn' },
+      live: { label: 'Live', cls: 'badge-positive' },
+    };
+
+    function render() {
+      const container = document.getElementById('app');
+      container.innerHTML = (view === 'detail' && activeProjectId) ? renderProjectDetail() : renderProjectList();
+    }
+
+    function projectRoster(projectId) {
+      return db.projectBloggers.filter((pb) => pb.projectId === projectId);
+    }
+
+    /* ---------------- List view ---------------- */
+    function renderProjectList() {
+      const projects = [...db.projects]
+        .filter((p) => !projectStatusFilter || p.status === projectStatusFilter)
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+      return `
+        <div class="card-row" style="align-items:center;margin-bottom:18px;">
+          <h1 style="margin:0;">Projects</h1>
+          <button class="btn btn-primary" onclick="openProjectModal()">+ New Project</button>
+        </div>
+        <div class="chip-select" style="margin-bottom:18px;">
+          <div class="chip ${!projectStatusFilter ? 'selected' : ''}" onclick="setProjectStatusFilter('')">All</div>
+          ${Object.entries(PROJECT_STATUS_OPTIONS)
+            .map(([k, v]) => `<div class="chip ${projectStatusFilter === k ? 'selected' : ''}" onclick="setProjectStatusFilter('${k}')">${v}</div>`)
+            .join('')}
+        </div>
+        ${projects.length === 0
+          ? `<div class="empty-state"><p>No projects yet.</p><button class="btn btn-primary btn-sm" onclick="openProjectModal()">+ New Project</button></div>`
+          : `<div class="grid grid-3">${projects.map(projectCard).join('')}</div>`}
+      `;
+    }
+
+    function projectCard(p) {
+      const brand = db.brands.find((b) => b.id === p.brandId);
+      const roster = projectRoster(p.id);
+      const risk = roster.filter((r) => r.visitTrackStatus === 'at_risk' || r.visitTrackStatus === 'find_replacement').length;
+      return `
+        <div class="card" style="cursor:pointer;" onclick="openProject('${p.id}')">
+          <div class="card-row" style="margin-bottom:8px;">
+            <h3 style="margin:0;">${escapeHtml(p.title)}</h3>
+            ${badge(p.status)}
+          </div>
+          ${brand ? `<div class="small muted" style="margin-bottom:6px;">${escapeHtml(brand.name)}</div>` : ''}
+          <div class="small muted">${p.startDate ? formatDate(p.startDate) : '—'} → ${p.endDate ? formatDate(p.endDate) : '—'}</div>
+          <div class="small" style="margin-top:10px;">👥 ${roster.length} blogger${roster.length === 1 ? '' : 's'}${risk ? ` · <span style="color:var(--orange);font-weight:700;">${risk} need attention</span>` : ''}</div>
+        </div>
+      `;
+    }
+
+    function setProjectStatusFilter(status) { projectStatusFilter = status; render(); }
+    function openProject(id) { activeProjectId = id; view = 'detail'; render(); }
+    function backToProjects() { view = 'list'; activeProjectId = null; render(); }
+
+    /* ---------------- Detail view ---------------- */
+    function renderProjectDetail() {
+      const p = db.projects.find((x) => x.id === activeProjectId);
+      if (!p) { view = 'list'; activeProjectId = null; return renderProjectList(); }
+      const brand = db.brands.find((b) => b.id === p.brandId);
+      const roster = projectRoster(p.id);
+
+      return `
+        <button class="btn btn-ghost btn-sm" style="margin-bottom:14px;" onclick="backToProjects()">← All projects</button>
+        <div class="card">
+          <div class="card-row" style="margin-bottom:4px;">
+            <div>
+              <h1 style="margin:0 0 4px;">${escapeHtml(p.title)}</h1>
+              <div class="small muted">${brand ? escapeHtml(brand.name) : 'No brand set'}</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;">
+              ${badge(p.status)}
+              <button class="btn btn-ghost btn-sm" onclick="openProjectModal('${p.id}')">Edit</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteProject('${p.id}')">Delete</button>
+            </div>
+          </div>
+          <hr class="divider" />
+          <div class="grid grid-2">
+            <div>
+              <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Brief</div>
+              <p style="white-space:pre-wrap;">${p.brief ? escapeHtml(p.brief) : '<span class="muted">No brief added yet.</span>'}</p>
+            </div>
+            <div>
+              <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Address</div>
+              <p>${p.address ? escapeHtml(p.address) : '<span class="muted">—</span>'}</p>
+            </div>
+          </div>
+          <div class="grid grid-3">
+            <div><div class="small muted" style="font-weight:700;">Dates</div><div>${p.startDate ? formatDate(p.startDate) : '—'} → ${p.endDate ? formatDate(p.endDate) : '—'}</div></div>
+            <div><div class="small muted" style="font-weight:700;">Content deadline</div><div>${p.contentDeadline ? formatDate(p.contentDeadline) : '—'}</div></div>
+            <div><div class="small muted" style="font-weight:700;">Notes</div><div>${p.notes ? escapeHtml(p.notes) : '—'}</div></div>
+          </div>
+        </div>
+        <div class="card" style="cursor:pointer;" onclick="openRoster('${p.id}')">
+          <div class="card-row" style="align-items:center;">
+            <div>
+              <h3 style="margin:0;">Bloggers <span class="muted small">(${roster.length})</span></h3>
+              <div class="small muted" style="margin-top:4px;">${roster.length ? rosterQuickSummary(roster) : 'No bloggers added yet'}</div>
+            </div>
+            <button class="btn btn-secondary btn-sm">Open roster →</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function rosterQuickSummary(roster) {
+      const risk = roster.filter((r) => r.visitTrackStatus === 'at_risk').length;
+      const replace = roster.filter((r) => r.visitTrackStatus === 'find_replacement').length;
+      const live = roster.filter((r) => r.contentStatus === 'live').length;
+      const parts = [];
+      if (risk) parts.push(`${risk} at risk`);
+      if (replace) parts.push(`${replace} need replacement`);
+      parts.push(`${live}/${roster.length} content live`);
+      return parts.join(' · ');
+    }
+
+    /* ---------------- Roster drawer ("half tab") ---------------- */
+    function openRoster(projectId) {
+      activeProjectId = projectId;
+      document.getElementById('drawer-root').innerHTML = renderRosterDrawer(projectId);
+    }
+    function closeRoster() { document.getElementById('drawer-root').innerHTML = ''; render(); }
+    function renderRosterAndRefresh() {
+      const el = document.getElementById('drawer-root');
+      if (el.innerHTML) el.innerHTML = renderRosterDrawer(activeProjectId);
+    }
+
+    function renderRosterDrawer(projectId) {
+      const p = db.projects.find((x) => x.id === projectId);
+      const roster = projectRoster(projectId);
+      return `
+        <div class="drawer-backdrop" onclick="if(event.target===this) closeRoster()">
+          <div class="drawer">
+            <button class="modal-close" style="float:right;" onclick="closeRoster()">✕</button>
+            <h2 style="margin:0 0 2px;">Bloggers — ${escapeHtml(p.title)}</h2>
+            <p class="small muted" style="margin-bottom:18px;">${roster.length} added</p>
+            <button class="btn btn-primary btn-sm" style="margin-bottom:16px;" onclick="openAddBloggerModal('${projectId}')">+ Add blogger from database</button>
+            ${roster.length === 0
+              ? `<div class="empty-state"><p>No bloggers added to this project yet.</p></div>`
+              : `<div class="table-wrap"><table>
+                  <thead><tr>
+                    <th>Blogger</th>
+                    <th>Expected visit</th>
+                    <th>Actual visit</th>
+                    <th>Content</th>
+                    <th>Stats</th>
+                    <th></th>
+                  </tr></thead>
+                  <tbody>${roster.map(rosterRow).join('')}</tbody>
+                </table></div>`}
+          </div>
+        </div>
+      `;
+    }
+
+    function rosterRow(pb) {
+      const b = db.bloggerDirectory.find((x) => x.id === pb.bloggerId);
+      const name = b ? (b.profileName || 'Untitled blogger') : 'Blogger removed from database';
+      return `
+        <tr>
+          <td style="min-width:150px;">
+            <div style="font-weight:600;">${escapeHtml(name)}</div>
+            ${b && b.instagramUrl ? `<a class="small" href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener">Instagram</a>` : ''}
+          </td>
+          <td style="min-width:190px;">
+            <input type="date" value="${pb.expectedVisitDate || ''}" onchange="updateRoster('${pb.id}','expectedVisitDate',this.value)" style="margin-bottom:6px;" />
+            <select onchange="updateRoster('${pb.id}','visitTrackStatus',this.value)">
+              ${Object.entries(TRACK_STATUS_META).map(([k, m]) => `<option value="${k}" ${pb.visitTrackStatus === k ? 'selected' : ''}>${m.label}</option>`).join('')}
+            </select>
+          </td>
+          <td style="min-width:170px;">
+            <input type="date" value="${pb.actualVisitDate || ''}" onchange="updateRoster('${pb.id}','actualVisitDate',this.value)" style="margin-bottom:6px;" />
+            <label class="checkbox-row" style="margin:0;">
+              <input type="checkbox" ${pb.visitConfirmed ? 'checked' : ''} onchange="updateRoster('${pb.id}','visitConfirmed',this.checked)" />
+              <span class="small">Visit happened</span>
+            </label>
+          </td>
+          <td style="min-width:230px;">
+            <select onchange="updateRoster('${pb.id}','contentStatus',this.value)" style="margin-bottom:6px;">
+              ${Object.entries(CONTENT_STATUS_META).map(([k, m]) => `<option value="${k}" ${pb.contentStatus === k ? 'selected' : ''}>${m.label}</option>`).join('')}
+            </select>
+            <input placeholder="What was posted (e.g. Reel + 2 Stories)" value="${escapeHtml(pb.contentWhat || '')}" onchange="updateRoster('${pb.id}','contentWhat',this.value)" style="margin-bottom:6px;" />
+            <input placeholder="Content link" value="${escapeHtml(pb.contentLink || '')}" onchange="updateRoster('${pb.id}','contentLink',this.value)" />
+          </td>
+          <td style="min-width:130px;">
+            <label class="checkbox-row"><input type="checkbox" ${pb.statsRequested ? 'checked' : ''} onchange="updateRoster('${pb.id}','statsRequested',this.checked)" /><span class="small">Requested</span></label>
+            <label class="checkbox-row"><input type="checkbox" ${pb.statsSubmitted ? 'checked' : ''} onchange="updateRoster('${pb.id}','statsSubmitted',this.checked)" /><span class="small">Submitted</span></label>
+          </td>
+          <td><button class="btn btn-ghost btn-sm" onclick="removeFromRoster('${pb.id}')" title="Remove from project">✕</button></td>
+        </tr>
+      `;
+    }
+
+    /* Every field save is wrapped end-to-end (including the synchronous
+       lookup) and always re-renders in `finally`, so a save failure surfaces
+       as a toast instead of the UI just doing nothing — see the same fix
+       applied earlier to blogger-database.html's submitBlogger(). */
+    async function updateRoster(pbId, field, value) {
+      try {
+        const pb = db.projectBloggers.find((x) => x.id === pbId);
+        if (!pb) return;
+        pb[field] = value;
+        await dbUpdate('projectBloggers', pbId, { [field]: value });
+      } catch (err) {
+        console.error('updateRoster failed:', err);
+        toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        renderRosterAndRefresh();
+      }
+    }
+
+    async function removeFromRoster(pbId) {
+      if (!confirm('Remove this blogger from the project roster?')) return;
+      try {
+        await dbDelete('projectBloggers', pbId);
+        db.projectBloggers = db.projectBloggers.filter((x) => x.id !== pbId);
+        toast('Removed from roster.');
+      } catch (err) {
+        console.error('removeFromRoster failed:', err);
+        toast('Could not remove: ' + (err && err.message ? err.message : 'unknown error'));
+      }
+      renderRosterAndRefresh();
+      render();
+    }
+
+    /* ---------------- Add blogger to project (from directory) ---------------- */
+    function openAddBloggerModal(projectId) {
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeAddBloggerModal()">
+          <div class="modal" style="max-width:640px;">
+            <button class="modal-close" onclick="closeAddBloggerModal()">✕</button>
+            <h2 style="margin-top:0;">Add blogger to project</h2>
+            <input id="add-blogger-search" placeholder="Search by name, handle, city…" oninput="renderAddBloggerResults('${projectId}')" style="margin-bottom:14px;" />
+            <div id="add-blogger-results"></div>
+          </div>
+        </div>
+      `;
+      renderAddBloggerResults(projectId);
+      document.getElementById('add-blogger-search').focus();
+    }
+    function closeAddBloggerModal() { document.getElementById('modal-root').innerHTML = ''; }
+
+    function renderAddBloggerResults(projectId) {
+      const q = (document.getElementById('add-blogger-search').value || '').trim().toLowerCase();
+      const already = new Set(projectRoster(projectId).map((pb) => pb.bloggerId));
+      const results = db.bloggerDirectory
+        .filter((b) => !already.has(b.id))
+        .filter((b) => !q || `${b.profileName || ''} ${b.instagramUrl || ''} ${b.city || ''}`.toLowerCase().includes(q))
+        .sort((a, b) => (a.profileName || '').localeCompare(b.profileName || '', undefined, { sensitivity: 'base' }))
+        .slice(0, 40);
+      const el = document.getElementById('add-blogger-results');
+      el.innerHTML = results.length === 0
+        ? `<p class="muted small">No matching bloggers.</p>`
+        : results
+            .map(
+              (b) => `
+        <div class="card-row" style="padding:9px 0;border-bottom:1px solid var(--line-soft);align-items:center;">
+          <div>
+            <div style="font-weight:600;">${escapeHtml(b.profileName || 'Untitled blogger')}</div>
+            <div class="small muted">${escapeHtml(b.city || '')}${b.followersCount != null ? ' · ' + Number(b.followersCount).toLocaleString() + ' followers' : ''}</div>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="addBloggerToProject('${projectId}','${b.id}')">+ Add</button>
+        </div>`
+            )
+            .join('');
+    }
+
+    async function addBloggerToProject(projectId, bloggerId) {
+      try {
+        const row = await dbInsert('projectBloggers', {
+          projectId,
+          bloggerId,
+          expectedVisitDate: null,
+          visitTrackStatus: 'on_track',
+          actualVisitDate: null,
+          visitConfirmed: false,
+          contentStatus: 'not_posted',
+          contentWhat: '',
+          contentLink: '',
+          statsRequested: false,
+          statsSubmitted: false,
+          notes: '',
+          createdAt: nowISO(),
+        });
+        db.projectBloggers.push(row);
+        toast('Blogger added.');
+        renderAddBloggerResults(projectId);
+        renderRosterAndRefresh();
+      } catch (err) {
+        console.error('addBloggerToProject failed:', err);
+        toast('Could not add: ' + (err && err.message ? err.message : 'unknown error'));
+      }
+    }
+
+    /* ---------------- Project create/edit modal ---------------- */
+    function openProjectModal(id) {
+      const p = id ? db.projects.find((x) => x.id === id) : null;
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">✕</button>
+            <h2 style="margin-top:0;">${p ? 'Edit project' : 'New project'}</h2>
+            <label>Title</label>
+            <input id="p-title" value="${p ? escapeHtml(p.title) : ''}" placeholder="e.g. Bowlers brunch" />
+            <label>Brand</label>
+            <select id="p-brand">
+              <option value="">No brand</option>
+              ${db.brands.map((b) => `<option value="${b.id}" ${p && p.brandId === b.id ? 'selected' : ''}>${escapeHtml(b.name)}</option>`).join('')}
+            </select>
+            <label>Status</label>
+            <select id="p-status">
+              ${Object.entries(PROJECT_STATUS_OPTIONS).map(([k, v]) => `<option value="${k}" ${(p ? p.status : 'planning') === k ? 'selected' : ''}>${v}</option>`).join('')}
+            </select>
+            <label>Brief</label>
+            <textarea id="p-brief" placeholder="Concept, deliverables, what's expected...">${p ? escapeHtml(p.brief || '') : ''}</textarea>
+            <label>Address</label>
+            <input id="p-address" value="${p ? escapeHtml(p.address || '') : ''}" placeholder="Venue address" />
+            <div class="grid grid-2">
+              <div><label>Start date</label><input id="p-start" type="date" value="${p && p.startDate ? p.startDate : ''}" /></div>
+              <div><label>End date</label><input id="p-end" type="date" value="${p && p.endDate ? p.endDate : ''}" /></div>
+            </div>
+            <label>Content deadline</label>
+            <input id="p-content-deadline" type="date" value="${p && p.contentDeadline ? p.contentDeadline : ''}" />
+            <label>Notes</label>
+            <textarea id="p-notes" placeholder="Anything else to remember...">${p ? escapeHtml(p.notes || '') : ''}</textarea>
+            <button class="btn btn-primary btn-block" style="margin-top:18px;" onclick="submitProject('${p ? p.id : ''}')">${p ? 'Save changes' : 'Create project'}</button>
+          </div>
+        </div>
+      `;
+    }
+    function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+
+    function readProjectForm() {
+      return {
+        title: document.getElementById('p-title').value.trim(),
+        brandId: document.getElementById('p-brand').value || null,
+        status: document.getElementById('p-status').value,
+        brief: document.getElementById('p-brief').value.trim(),
+        address: document.getElementById('p-address').value.trim(),
+        startDate: document.getElementById('p-start').value || null,
+        endDate: document.getElementById('p-end').value || null,
+        contentDeadline: document.getElementById('p-content-deadline').value || null,
+        notes: document.getElementById('p-notes').value.trim(),
+      };
+    }
+
+    async function submitProject(id) {
+      try {
+        const fields = readProjectForm();
+        if (!fields.title) fields.title = 'Untitled project';
+        if (id) {
+          const updated = await dbUpdate('projects', id, fields);
+          const idx = db.projects.findIndex((x) => x.id === id);
+          if (idx >= 0) db.projects[idx] = updated;
+          toast('Project updated.');
+        } else {
+          const row = await dbInsert('projects', { ...fields, createdAt: nowISO() });
+          db.projects.push(row);
+          toast('Project created.');
+        }
+      } catch (err) {
+        console.error('submitProject failed:', err);
+        toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
+        return;
+      }
+      closeModal();
+      render();
+    }
+
+    async function deleteProject(id) {
+      if (!confirm('Delete this project and its entire roster? This cannot be undone.')) return;
+      try {
+        await dbDelete('projects', id);
+        db.projects = db.projects.filter((x) => x.id !== id);
+        db.projectBloggers = db.projectBloggers.filter((x) => x.projectId !== id);
+        toast('Project deleted.');
+      } catch (err) {
+        console.error('deleteProject failed:', err);
+        toast('Could not delete: ' + (err && err.message ? err.message : 'unknown error'));
+        return;
+      }
+      backToProjects();
+    }
+  </script>
+</body>
+</html>

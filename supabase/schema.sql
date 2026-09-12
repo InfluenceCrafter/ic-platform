@@ -230,6 +230,48 @@ create table if not exists blogger_directory (
 );
 
 -- ============================================================
+-- 4c. PROJECTS (internal collaboration tracker — separate from the
+-- public campaign marketplace above. There, creators apply to open
+-- campaigns and get reviewed; here the admin adds bloggers straight
+-- from blogger_directory and tracks their progress by hand. Phase 1
+-- is admin-only; brand/blogger portal access comes in a later phase.)
+-- ============================================================
+create table if not exists projects (
+  id uuid primary key default gen_random_uuid(),
+  brand_id uuid references brands(id) on delete set null,
+  title text not null,
+  status text not null default 'planning' check (status in ('planning', 'active', 'completed', 'archived')),
+  brief text default '',
+  address text default '',
+  start_date date,
+  end_date date,
+  content_deadline date,
+  notes text default '',
+  created_at timestamptz not null default now(),
+  created_by uuid references profiles(id) default auth.uid()
+);
+
+create table if not exists project_bloggers (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references projects(id) on delete cascade,
+  blogger_id uuid not null references blogger_directory(id) on delete cascade,
+  expected_visit_date date,
+  visit_track_status text not null default 'on_track'
+    check (visit_track_status in ('on_track', 'at_risk', 'find_replacement')),
+  actual_visit_date date,
+  visit_confirmed boolean not null default false,
+  content_status text not null default 'not_posted'
+    check (content_status in ('not_posted', 'draft_submitted', 'live')),
+  content_what text default '',
+  content_link text default '',
+  stats_requested boolean not null default false,
+  stats_submitted boolean not null default false,
+  notes text default '',
+  created_at timestamptz not null default now(),
+  unique (project_id, blogger_id)
+);
+
+-- ============================================================
 -- 5. HELPER: is_admin() — used by RLS policies below
 -- ============================================================
 create or replace function is_admin()
@@ -291,6 +333,8 @@ alter table messages enable row level security;
 alter table notifications enable row level security;
 alter table activity_log enable row level security;
 alter table blogger_directory enable row level security;
+alter table projects enable row level security;
+alter table project_bloggers enable row level security;
 
 -- profiles
 -- Any authenticated user can also see admin rows specifically (role = 'admin')
@@ -458,6 +502,15 @@ drop policy if exists "blogger_directory_all" on blogger_directory;
 create policy "blogger_directory_all" on blogger_directory for all
   using (is_admin()) with check (is_admin());
 
+-- projects / project_bloggers (admin-only for now — brand and blogger
+-- access is added in a later phase, once those portals exist)
+drop policy if exists "projects_all" on projects;
+create policy "projects_all" on projects for all
+  using (is_admin()) with check (is_admin());
+drop policy if exists "project_bloggers_all" on project_bloggers;
+create policy "project_bloggers_all" on project_bloggers for all
+  using (is_admin()) with check (is_admin());
+
 -- Base table-level privileges. RLS policies above only restrict rows;
 -- Postgres also requires the underlying GRANT before a role can touch a
 -- table at all. No table has a delete policy, so delete is intentionally
@@ -476,9 +529,12 @@ grant select, insert, update on
   messages,
   notifications,
   activity_log,
-  blogger_directory
+  blogger_directory,
+  projects,
+  project_bloggers
 to authenticated;
 
--- blogger_directory needs delete too (admin cleans up bad/duplicate entries),
+-- blogger_directory / projects / project_bloggers need delete too (admin
+-- cleans up bad/duplicate entries, closed-out projects, removed rosters),
 -- unlike every other table above.
-grant delete on blogger_directory to authenticated;
+grant delete on blogger_directory, projects, project_bloggers to authenticated;

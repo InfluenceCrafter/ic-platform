@@ -205,6 +205,13 @@ tbody tr:hover { background: var(--paper); }
 .modal-close { float: right; background: var(--grey-bg); border: none; width: 28px; height: 28px; border-radius: 50%; font-size: 16px; cursor: pointer; color: var(--ink-soft); line-height: 1; }
 .modal-close:hover { background: var(--line); color: var(--ink); }
 
+/* Slide-over drawer (e.g. project roster) — a wide "half tab" that opens
+   over the current view without leaving it, distinct from the centered
+   .modal used for single-record forms. */
+.drawer-backdrop { position: fixed; inset: 0; background: rgba(17,17,20,0.45); backdrop-filter: blur(2px); z-index: 45; display: flex; justify-content: flex-end; }
+.drawer { background: #fff; width: 100%; max-width: 1040px; height: 100%; overflow-y: auto; box-shadow: var(--shadow-lg); padding: 28px; animation: drawer-in 0.18s ease; }
+@keyframes drawer-in { from { transform: translateX(28px); opacity: 0; } to { transform: none; opacity: 1; } }
+
 .toast { position: fixed; bottom: -60px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 12px 22px; border-radius: 999px; font-size: 14px; font-weight: 500; box-shadow: var(--shadow-lg); transition: bottom 0.25s ease; z-index: 100; }
 .toast.show { bottom: 28px; }
 
