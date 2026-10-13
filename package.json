@@ -1,0 +1,9 @@
+{
+  "name": "ic-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "InfluenceCrafter internal platform (static site + Vercel serverless functions)",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.70.0"
+  }
+}

@@ -66,11 +66,19 @@ const TABLES = {
   },
   bloggerDirectory: {
     table: 'blogger_directory',
-    map: { id: 'id', profileName: 'profile_name', instagramUrl: 'instagram_url', tiktokUrl: 'tiktok_url', email: 'email', followersCount: 'followers_count', engagementRate: 'engagement_rate', avgReach90d: 'avg_reach_90d', audienceNotes: 'audience_notes', audienceStats: 'audience_stats', city: 'city', languageGroup: 'language_group', audienceCountries: 'audience_countries', gender: 'gender', collabType: 'collab_type', reelPrice: 'reel_price', storyPrice: 'story_price', termsNotes: 'terms_notes', status: 'status', statsUpdatedAt: 'stats_updated_at', createdAt: 'created_at' },
+    map: { id: 'id', profileName: 'profile_name', instagramUrl: 'instagram_url', tiktokUrl: 'tiktok_url', email: 'email', followersCount: 'followers_count', engagementRate: 'engagement_rate', avgReach90d: 'avg_reach_90d', audienceNotes: 'audience_notes', audienceStats: 'audience_stats', city: 'city', languageGroup: 'language_group', audienceCountries: 'audience_countries', gender: 'gender', collabType: 'collab_type', reelPrice: 'reel_price', storyPrice: 'story_price', termsNotes: 'terms_notes', status: 'status', statsUpdatedAt: 'stats_updated_at', createdAt: 'created_at', category: 'category' },
   },
   projects: {
     table: 'projects',
-    map: { id: 'id', brandId: 'brand_id', title: 'title', category: 'category', status: 'status', brief: 'brief', briefPdfLink: 'brief_pdf_link', deliverables: 'deliverables', address: 'address', startDate: 'start_date', endDate: 'end_date', contentDeadline: 'content_deadline', notes: 'notes', createdAt: 'created_at' },
+    map: { id: 'id', brandId: 'brand_id', title: 'title', category: 'category', status: 'status', brief: 'brief', briefPdfLink: 'brief_pdf_link', deliverables: 'deliverables', address: 'address', startDate: 'start_date', endDate: 'end_date', contentDeadline: 'content_deadline', notes: 'notes', createdAt: 'created_at', clientContact: 'client_contact', contractTerms: 'contract_terms', dealStatus: 'deal_status' },
+  },
+  bloggerPerformanceHistory: {
+    table: 'blogger_performance_history',
+    map: { id: 'id', bloggerId: 'blogger_id', contentUrl: 'content_url', platform: 'platform', postedAt: 'posted_at', views: 'views', likes: 'likes', comments: 'comments', shares: 'shares', er: 'er', source: 'source', notes: 'notes', createdAt: 'created_at' },
+  },
+  aiRecommendations: {
+    table: 'ai_recommendations',
+    map: { id: 'id', bloggerId: 'blogger_id', projectId: 'project_id', content: 'content', model: 'model', status: 'status', createdAt: 'created_at' },
   },
   projectChecklist: {
     table: 'project_checklist',

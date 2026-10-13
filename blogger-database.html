@@ -131,6 +131,102 @@
       return { cls: 'badge-positive', label: `Checked ${days}d ago`, days };
     }
 
+    /* ---------------- Performance history (manual entries, source-ready for a future API) ---------------- */
+    const PERF_PLATFORM_OPTIONS = ['Instagram', 'TikTok', 'YouTube', 'Other'];
+
+    function bloggerHistory(bloggerId) {
+      return (db.bloggerPerformanceHistory || [])
+        .filter((h) => h.bloggerId === bloggerId)
+        .sort((a, b) => new Date(b.postedAt || b.createdAt || 0) - new Date(a.postedAt || a.createdAt || 0));
+    }
+
+    function openHistoryModal(bloggerId) {
+      const b = db.bloggerDirectory.find((x) => x.id === bloggerId);
+      if (!b) return;
+      const entries = bloggerHistory(bloggerId);
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">×</button>
+            <h2 style="margin-top:0;">Performance history — ${escapeHtml(b.profileName)}</h2>
+            <div class="small muted" style="margin-bottom:10px;">Manual entries for now — add one per published video/post to track what's taking off over time.</div>
+            <div class="grid grid-2">
+              <div><label>Content link</label><input id="h-url" placeholder="https://instagram.com/reel/…" /></div>
+              <div><label>Platform</label><select id="h-platform">${PERF_PLATFORM_OPTIONS.map((p) => `<option value="${p}">${p}</option>`).join('')}</select></div>
+            </div>
+            <div class="grid grid-2">
+              <div><label>Posted date</label><input id="h-posted" type="date" /></div>
+              <div><label>ER (%) <span class="muted small">(optional)</span></label><input id="h-er" type="number" step="0.01" /></div>
+            </div>
+            <div class="grid grid-3">
+              <div><label>Views</label><input id="h-views" type="number" min="0" /></div>
+              <div><label>Likes</label><input id="h-likes" type="number" min="0" /></div>
+              <div><label>Comments</label><input id="h-comments" type="number" min="0" /></div>
+            </div>
+            <div><label>Shares</label><input id="h-shares" type="number" min="0" /></div>
+            <label>Notes</label>
+            <textarea id="h-notes" placeholder="Why it did (or didn't) work…"></textarea>
+            <button class="btn btn-primary btn-block" style="margin-top:10px;" onclick="addPerformanceEntry('${bloggerId}')">+ Add entry</button>
+            <hr class="divider" style="margin:18px 0;" />
+            ${entries.length === 0
+              ? '<div class="small muted">No entries yet.</div>'
+              : entries.map((h) => `
+                <div class="card-row" style="align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line-soft);">
+                  <div>
+                    <div><strong>${h.postedAt ? formatDate(h.postedAt) : '—'}</strong> <span class="muted small">${escapeHtml(h.platform || '')}</span></div>
+                    <div class="small">${h.views != null ? `👁 ${Number(h.views).toLocaleString()}` : ''} ${h.likes != null ? `· ❤ ${Number(h.likes).toLocaleString()}` : ''} ${h.comments != null ? `· 💬 ${Number(h.comments).toLocaleString()}` : ''} ${h.er != null ? `· ER ${h.er}%` : ''}</div>
+                    ${h.contentUrl ? `<a class="small" href="${escapeHtml(h.contentUrl)}" target="_blank" rel="noopener">Open content</a>` : ''}
+                    ${h.notes ? `<div class="small muted" style="margin-top:4px;">${escapeHtml(h.notes)}</div>` : ''}
+                  </div>
+                  <button class="btn btn-ghost btn-sm" onclick="deletePerformanceEntry('${h.id}', '${bloggerId}')">✕</button>
+                </div>
+              `).join('')}
+          </div>
+        </div>`;
+    }
+
+    async function addPerformanceEntry(bloggerId) {
+      try {
+        const fields = {
+          bloggerId,
+          contentUrl: document.getElementById('h-url').value.trim(),
+          platform: document.getElementById('h-platform').value,
+          postedAt: document.getElementById('h-posted').value || null,
+          views: document.getElementById('h-views').value !== '' ? Number(document.getElementById('h-views').value) : 0,
+          likes: document.getElementById('h-likes').value !== '' ? Number(document.getElementById('h-likes').value) : 0,
+          comments: document.getElementById('h-comments').value !== '' ? Number(document.getElementById('h-comments').value) : 0,
+          shares: document.getElementById('h-shares').value !== '' ? Number(document.getElementById('h-shares').value) : 0,
+          er: document.getElementById('h-er').value !== '' ? Number(document.getElementById('h-er').value) : null,
+          source: 'manual',
+          notes: document.getElementById('h-notes').value.trim(),
+          createdAt: nowISO(),
+        };
+        const row = await dbInsert('bloggerPerformanceHistory', fields);
+        db.bloggerPerformanceHistory = db.bloggerPerformanceHistory || [];
+        db.bloggerPerformanceHistory.push(row);
+        toast('Entry added.');
+      } catch (err) {
+        console.error('addPerformanceEntry failed:', err);
+        toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
+        return;
+      }
+      openHistoryModal(bloggerId);
+    }
+
+    async function deletePerformanceEntry(id, bloggerId) {
+      if (!confirm('Delete this entry?')) return;
+      try {
+        await dbDelete('bloggerPerformanceHistory', id);
+        db.bloggerPerformanceHistory = (db.bloggerPerformanceHistory || []).filter((x) => x.id !== id);
+        toast('Entry deleted.');
+      } catch (err) {
+        console.error('deletePerformanceEntry failed:', err);
+        toast('Could not delete: ' + (err && err.message ? err.message : 'unknown error'));
+        return;
+      }
+      openHistoryModal(bloggerId);
+    }
+
     async function markStatsChecked(id) {
       await reload();
       const nowIso = nowISO();
@@ -357,7 +453,7 @@
     function bloggerTable(list) {
       const sorted = [...list].sort(SORT_COMPARATORS[sortBy] || SORT_COMPARATORS.name);
       return `<div class="table-scroll"><table>
-        <thead><tr><th>Profile</th><th>Email</th><th>Tags</th><th>Audience</th><th>Followers</th><th>ER</th><th>Avg reach</th><th>Type</th><th>Status</th><th>Freshness</th><th>Terms / notes</th><th></th></tr></thead>
+        <thead><tr><th>Profile</th><th>Email</th><th>Niche</th><th>Tags</th><th>Audience</th><th>Followers</th><th>ER</th><th>Avg reach</th><th>Type</th><th>Status</th><th>Freshness</th><th>Terms / notes</th><th></th></tr></thead>
         <tbody>
         ${sorted.map((b) => {
           const fresh = statsFreshness(b.statsUpdatedAt);
@@ -381,6 +477,7 @@
               </div>
             </td>
             <td class="small">${escapeHtml(b.email || '—')}</td>
+            <td class="small" style="max-width:130px;">${(b.category || []).length ? (b.category || []).map((c) => `<span class="tag">${escapeHtml(c)}</span>`).join(' ') : '<span class="muted">—</span>'}</td>
             <td style="white-space:nowrap;">
               ${om ? `<span class="badge" style="background:${om.bg};color:${om.color};" title="${escapeHtml(om.label)}">${om.flag} ${escapeHtml(origin)}</span>` : '<span class="muted small">—</span>'}
               ${gm ? `<span class="badge" style="background:${gm.bg};color:${gm.color};margin-left:3px;">${gm.icon}</span>` : ''}
@@ -401,6 +498,7 @@
             <td class="small" style="max-width:180px;" title="${escapeHtml(b.termsNotes || '')}">${escapeHtml(truncate(b.termsNotes, 40))}</td>
             <td style="white-space:nowrap;">
               <button class="btn btn-ghost btn-sm" onclick='openBloggerModal(${JSON.stringify(b.id)})'>Edit</button>
+              <button class="btn btn-ghost btn-sm" onclick="openHistoryModal('${b.id}')">History</button>
               <button class="btn btn-ghost btn-sm" onclick="deleteBlogger('${b.id}')">Delete</button>
             </td>
           </tr>
@@ -430,6 +528,8 @@
             </div>
             <label>Email (for briefs)</label>
             <input id="b-email" type="email" value="${b ? escapeHtml(b.email || '') : ''}" />
+            <label>Niche / category tags <span class="field-hint" style="display:inline;">(comma-separated, e.g. "food, lifestyle" — used for strategic matching)</span></label>
+            <input id="b-category" value="${b ? escapeHtml((b.category || []).join(', ')) : ''}" placeholder="e.g. food, travel, beauty" />
             <div class="grid grid-3">
               <div><label>Followers</label><input id="b-followers" type="number" value="${b && b.followersCount != null ? b.followersCount : ''}" /></div>
               <div><label>ER (%)</label><input id="b-er" type="number" step="0.01" value="${b && b.engagementRate != null ? b.engagementRate : ''}" /></div>
@@ -623,6 +723,7 @@
         instagramUrl: document.getElementById('b-instagram').value.trim(),
         tiktokUrl: document.getElementById('b-tiktok').value.trim(),
         email: document.getElementById('b-email').value.trim(),
+        category: document.getElementById('b-category').value.split(',').map((s) => s.trim()).filter(Boolean),
         followersCount: document.getElementById('b-followers').value ? Number(document.getElementById('b-followers').value) : null,
         engagementRate: document.getElementById('b-er').value ? Number(document.getElementById('b-er').value) : null,
         avgReach90d: document.getElementById('b-reach').value ? Number(document.getElementById('b-reach').value) : null,

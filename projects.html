@@ -36,6 +36,8 @@
     let addBloggerCityFilter = '';
     let addBloggerHistoryFilter = ''; // '' | 'new' | 'returning'
     let addBloggerSortBy = 'name'; // 'name' | 'followers'
+    let addBloggerNicheFilter = ''; // matches against blogger.category tags
+    let addBloggerCountryFilter = ''; // matches against blogger.audienceCountries[0]
 
     (async function () {
       const ctx = await requireRole(['admin']);
@@ -45,6 +47,17 @@
     async function reload() { db = await loadDB(); }
 
     const PROJECT_STATUS_OPTIONS = { planning: 'Planning', active: 'Active', completed: 'Completed', archived: 'Archived' };
+
+    /* Deal/negotiation stage — separate from p.status above, which tracks
+       execution progress. This tracks where the client relationship stands
+       (useful the moment a lead comes in, before there's anything to execute). */
+    const DEAL_STATUS_META = {
+      lead: { label: 'Lead', cls: 'badge-neutral' },
+      negotiating: { label: 'Negotiating', cls: 'badge-warn' },
+      confirmed: { label: 'Confirmed', cls: 'badge-positive' },
+      active: { label: 'Active', cls: 'badge-positive' },
+      completed: { label: 'Completed', cls: 'badge-neutral' },
+    };
 
     /* Kept local (not in js/ui.js's shared STATUS_LABELS) because these are
        severity signals with specific colors, not generic status labels. */
@@ -143,13 +156,18 @@
         <div class="card" style="cursor:pointer;" onclick="openProject('${p.id}')">
           <div class="card-row" style="margin-bottom:8px;">
             <h3 style="margin:0;">${escapeHtml(p.title)}</h3>
-            ${badge(p.status)}
+            <div style="display:flex;gap:6px;flex-shrink:0;">${dealBadge(p.dealStatus)}${badge(p.status)}</div>
           </div>
           ${p.category ? `<span class="tag">${escapeHtml(p.category)}</span>` : ''}
           <div class="small muted" style="margin-top:6px;">${p.startDate ? formatDate(p.startDate) : '—'} → ${p.endDate ? formatDate(p.endDate) : '—'}</div>
           <div class="small" style="margin-top:10px;">👥 ${roster.length} blogger${roster.length === 1 ? '' : 's'}${risk ? ` · <span style="color:var(--orange);font-weight:700;">${risk} need attention</span>` : ''}</div>
         </div>
       `;
+    }
+
+    function dealBadge(status) {
+      const meta = DEAL_STATUS_META[status] || DEAL_STATUS_META.lead;
+      return `<span class="badge ${meta.cls}">${escapeHtml(meta.label)}</span>`;
     }
 
     function setProjectStatusFilter(status) { projectStatusFilter = status; render(); }
@@ -171,6 +189,7 @@
               ${p.category ? `<span class="tag">${escapeHtml(p.category)}</span>` : ''}
             </div>
             <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;">
+              ${dealBadge(p.dealStatus)}
               ${badge(p.status)}
               <button class="btn btn-ghost btn-sm" onclick="openProjectModal('${p.id}')">Edit</button>
               <button class="btn btn-danger btn-sm" onclick="deleteProject('${p.id}')">Delete</button>
@@ -194,6 +213,21 @@
             <div><div class="small muted" style="font-weight:700;">Dates</div><div>${p.startDate ? formatDate(p.startDate) : '—'} → ${p.endDate ? formatDate(p.endDate) : '—'}</div></div>
             <div><div class="small muted" style="font-weight:700;">Content deadline</div><div>${p.contentDeadline ? formatDate(p.contentDeadline) : '—'}</div></div>
             <div><div class="small muted" style="font-weight:700;">Notes</div><div>${p.notes ? escapeHtml(p.notes) : '—'}</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-row" style="align-items:center;margin-bottom:6px;">
+            <h3 style="margin:0;">Deal <span class="muted small">(${(DEAL_STATUS_META[p.dealStatus] || DEAL_STATUS_META.lead).label})</span></h3>
+          </div>
+          <div class="grid grid-2">
+            <div>
+              <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Client contact</div>
+              <p style="white-space:pre-wrap;">${p.clientContact ? escapeHtml(p.clientContact) : '<span class="muted">—</span>'}</p>
+            </div>
+            <div>
+              <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Terms</div>
+              <p style="white-space:pre-wrap;">${p.contractTerms ? escapeHtml(p.contractTerms) : '<span class="muted">—</span>'}</p>
+            </div>
           </div>
         </div>
         ${renderChecklistCard(p)}
@@ -523,7 +557,11 @@
       addBloggerCityFilter = '';
       addBloggerHistoryFilter = '';
       addBloggerSortBy = 'name';
+      addBloggerNicheFilter = '';
+      addBloggerCountryFilter = '';
       const cities = addBloggerCityOptions();
+      const niches = addBloggerNicheOptions();
+      const countries = addBloggerCountryOptions();
       document.getElementById('modal-root').innerHTML = `
         <div class="modal-backdrop" onclick="if(event.target===this) closeAddBloggerModal()">
           <div class="modal" style="max-width:640px;">
@@ -535,9 +573,17 @@
                 <option value="">All cities</option>
                 ${cities.map((c) => `<option value="${escapeHtml(c.toLowerCase())}">${escapeHtml(c)}</option>`).join('')}
               </select>
+              <select id="add-blogger-niche" style="width:auto;" onchange="onAddBloggerFilterChange('${projectId}')">
+                <option value="">All niches</option>
+                ${niches.map((c) => `<option value="${escapeHtml(c.toLowerCase())}">${escapeHtml(c)}</option>`).join('')}
+              </select>
+              <select id="add-blogger-country" style="width:auto;" onchange="onAddBloggerFilterChange('${projectId}')">
+                <option value="">All audience countries</option>
+                ${countries.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}
+              </select>
               <select id="add-blogger-history" style="width:auto;" onchange="onAddBloggerFilterChange('${projectId}')">
                 <option value="">New &amp; returning</option>
-                <option value="new">🆕 New only</option>
+                <option value="new">🆕 New only (not in this project yet)</option>
                 <option value="returning">Returning only</option>
               </select>
               <select id="add-blogger-sort" style="width:auto;" onchange="onAddBloggerFilterChange('${projectId}')">
@@ -560,8 +606,27 @@
       return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
     }
 
+    /* Niche/category tags set on each blogger (blogger-database.html) —
+       used here to strategically match bloggers to a campaign's topic. */
+    function addBloggerNicheOptions() {
+      const set = new Set();
+      db.bloggerDirectory.forEach((b) => (b.category || []).forEach((c) => c && set.add(c.trim())));
+      return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }
+
+    /* First entry of audienceCountries is the blogger's own
+       nationality/market (see blogger-database.html) — used as a quick
+       "only Czech / only Russian-speaking" style filter. */
+    function addBloggerCountryOptions() {
+      const set = new Set();
+      db.bloggerDirectory.forEach((b) => { const c = (b.audienceCountries || [])[0]; if (c) set.add(c); });
+      return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }
+
     function onAddBloggerFilterChange(projectId) {
       addBloggerCityFilter = document.getElementById('add-blogger-city').value;
+      addBloggerNicheFilter = document.getElementById('add-blogger-niche').value;
+      addBloggerCountryFilter = document.getElementById('add-blogger-country').value;
       addBloggerHistoryFilter = document.getElementById('add-blogger-history').value;
       addBloggerSortBy = document.getElementById('add-blogger-sort').value;
       renderAddBloggerResults(projectId);
@@ -574,6 +639,8 @@
         .filter((b) => !already.has(b.id))
         .filter((b) => !q || `${b.profileName || ''} ${b.instagramUrl || ''} ${b.city || ''}`.toLowerCase().includes(q))
         .filter((b) => !addBloggerCityFilter || (b.city || '').trim().toLowerCase() === addBloggerCityFilter)
+        .filter((b) => !addBloggerNicheFilter || (b.category || []).some((c) => c.trim().toLowerCase() === addBloggerNicheFilter))
+        .filter((b) => !addBloggerCountryFilter || (b.audienceCountries || [])[0] === addBloggerCountryFilter)
         .map((b) => ({ blogger: b, history: bloggerProjectHistory(b.id, projectId) }));
 
       if (addBloggerHistoryFilter === 'new') results = results.filter((r) => r.history.length === 0);
@@ -594,7 +661,8 @@
         <div class="card-row" style="padding:9px 0;border-bottom:1px solid var(--line-soft);align-items:center;">
           <div>
             <div style="font-weight:600;">${escapeHtml(b.profileName || 'Untitled blogger')}</div>
-            <div class="small muted">${escapeHtml(b.city || '')}${b.followersCount != null ? ' · ' + Number(b.followersCount).toLocaleString() + ' followers' : ''}</div>
+            <div class="small muted">${escapeHtml(b.city || '')}${b.followersCount != null ? ' · ' + Number(b.followersCount).toLocaleString() + ' followers' : ''}${(b.audienceCountries || [])[0] ? ' · ' + escapeHtml(b.audienceCountries[0]) : ''}</div>
+            ${(b.category || []).length ? `<div style="margin-top:2px;">${b.category.map((c) => `<span class="tag">${escapeHtml(c)}</span>`).join(' ')}</div>` : ''}
             <div class="small" style="margin-top:3px;">${
               history.length === 0
                 ? `<span class="badge badge-positive">🆕 New</span>`
@@ -651,6 +719,14 @@
             <select id="p-status">
               ${Object.entries(PROJECT_STATUS_OPTIONS).map(([k, v]) => `<option value="${k}" ${(p ? p.status : 'planning') === k ? 'selected' : ''}>${v}</option>`).join('')}
             </select>
+            <label>Deal stage</label>
+            <select id="p-deal-status">
+              ${Object.entries(DEAL_STATUS_META).map(([k, m]) => `<option value="${k}" ${(p ? p.dealStatus : 'lead') === k ? 'selected' : ''}>${m.label}</option>`).join('')}
+            </select>
+            <label>Client contact <span class="muted small">(name, email, phone…)</span></label>
+            <textarea id="p-client-contact" placeholder="Who we're dealing with on the client side">${p ? escapeHtml(p.clientContact || '') : ''}</textarea>
+            <label>Deal terms <span class="muted small">(barter/paid, amounts, what's included…)</span></label>
+            <textarea id="p-contract-terms" placeholder="What we agreed on">${p ? escapeHtml(p.contractTerms || '') : ''}</textarea>
             <label>Brief</label>
             <textarea id="p-brief" placeholder="Concept, what's expected...">${p ? escapeHtml(p.brief || '') : ''}</textarea>
             <label>Brief PDF link <span class="muted small">(Google Drive, Dropbox…)</span></label>
@@ -679,6 +755,9 @@
         title: document.getElementById('p-title').value.trim(),
         category: document.getElementById('p-category').value.trim(),
         status: document.getElementById('p-status').value,
+        dealStatus: document.getElementById('p-deal-status').value,
+        clientContact: document.getElementById('p-client-contact').value.trim(),
+        contractTerms: document.getElementById('p-contract-terms').value.trim(),
         brief: document.getElementById('p-brief').value.trim(),
         briefPdfLink: document.getElementById('p-brief-pdf').value.trim(),
         deliverables: document.getElementById('p-deliverables').value.trim(),
