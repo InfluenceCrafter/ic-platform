@@ -82,14 +82,26 @@ module.exports = async (req, res) => {
 
     const userPrompt = buildUserPrompt({ brief, candidates });
 
+    // Every candidate gets a rank + a one-sentence reason, so the output
+    // grows with the candidate pool (up to 60 — see projects.html's cap).
+    // 4096 tokens was too tight and got cut mid-JSON on larger pools,
+    // which surfaced as a generic "invalid JSON" error.
     const message = await client.messages.create({
       model: MODEL,
-      max_tokens: 4096,
+      max_tokens: 8192,
       thinking: { type: 'adaptive' },
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userPrompt }],
       output_config: { format: { type: 'json_schema', schema: OUTPUT_SCHEMA } },
     });
+
+    if (message.stop_reason === 'max_tokens') {
+      console.error('match-bloggers: response was cut off at max_tokens with', (req.body.candidates || []).length, 'candidates');
+      return res.status(502).json({ error: 'Response was cut off before finishing — try narrowing the filters above to fewer candidates and try again.' });
+    }
+    if (message.stop_reason === 'refusal') {
+      return res.status(502).json({ error: 'Claude declined to answer this request.' });
+    }
 
     const textBlock = message.content.find((block) => block.type === 'text');
     if (!textBlock || !textBlock.text) {
