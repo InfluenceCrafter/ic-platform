@@ -144,6 +144,7 @@
       const b = db.bloggerDirectory.find((x) => x.id === bloggerId);
       if (!b) return;
       const entries = bloggerHistory(bloggerId);
+      const recs = aiRecommendationsForBlogger(bloggerId);
       document.getElementById('modal-root').innerHTML = `
         <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
           <div class="modal">
@@ -181,8 +182,100 @@
                   <button class="btn btn-ghost btn-sm" onclick="deletePerformanceEntry('${h.id}', '${bloggerId}')">✕</button>
                 </div>
               `).join('')}
+
+            <hr class="divider" style="margin:18px 0;" />
+            <h3 style="margin:0 0 6px;">✨ AI content recommendation</h3>
+            <div class="small muted" style="margin-bottom:10px;">Uses this creator's profile + the performance history above to suggest a content angle and short script.</div>
+            <label>Project brief <span class="muted small">(optional)</span></label>
+            <textarea id="h-brief" placeholder="Paste the brand/project brief here to tailor the recommendation…"></textarea>
+            <button id="h-generate-btn" class="btn btn-primary btn-block" style="margin-top:10px;" onclick="generateScript('${bloggerId}')">✨ Generate script</button>
+            ${recs.length === 0
+              ? '<div class="small muted" style="margin-top:14px;">No recommendations generated yet.</div>'
+              : recs.map((r) => `
+                <div class="card-row" style="align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line-soft);margin-top:10px;">
+                  <div>
+                    <div class="small muted">${r.createdAt ? formatDate(r.createdAt) : ''} · ${escapeHtml(r.model || '')} · ${escapeHtml(r.status || 'draft')}</div>
+                    <div class="small" style="white-space:pre-wrap;margin-top:4px;">${escapeHtml(r.content)}</div>
+                  </div>
+                  <button class="btn btn-ghost btn-sm" onclick="deleteRecommendation('${r.id}', '${bloggerId}')">✕</button>
+                </div>
+              `).join('')}
           </div>
         </div>`;
+    }
+
+    function aiRecommendationsForBlogger(bloggerId) {
+      return (db.aiRecommendations || [])
+        .filter((r) => r.bloggerId === bloggerId)
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    }
+
+    async function generateScript(bloggerId) {
+      const b = db.bloggerDirectory.find((x) => x.id === bloggerId);
+      if (!b) return;
+      const briefEl = document.getElementById('h-brief');
+      const brief = briefEl ? briefEl.value.trim() : '';
+      const btn = document.getElementById('h-generate-btn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+      try {
+        const payload = {
+          blogger: {
+            name: b.profileName,
+            category: b.category || [],
+            city: b.city || '',
+            audienceCountry: (b.audienceCountries || [])[0] || '',
+            followers: b.followersCount || null,
+            er: b.engagementRate || null,
+          },
+          history: bloggerHistory(bloggerId).slice(0, 10).map((h) => ({
+            platform: h.platform,
+            views: h.views,
+            likes: h.likes,
+            comments: h.comments,
+            er: h.er,
+            notes: h.notes,
+          })),
+          brief: brief || undefined,
+        };
+        const res = await fetch('/api/generate-script', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        const row = await dbInsert('aiRecommendations', {
+          bloggerId,
+          projectId: null,
+          content: data.content,
+          model: 'claude-opus-4-7',
+          status: 'draft',
+          createdAt: nowISO(),
+        });
+        db.aiRecommendations = db.aiRecommendations || [];
+        db.aiRecommendations.push(row);
+        toast('Script generated.');
+      } catch (err) {
+        console.error('generateScript failed:', err);
+        toast('Could not generate: ' + (err && err.message ? err.message : 'unknown error'));
+        return;
+      } finally {
+        openHistoryModal(bloggerId);
+      }
+    }
+
+    async function deleteRecommendation(id, bloggerId) {
+      if (!confirm('Delete this recommendation?')) return;
+      try {
+        await dbDelete('aiRecommendations', id);
+        db.aiRecommendations = (db.aiRecommendations || []).filter((x) => x.id !== id);
+        toast('Deleted.');
+      } catch (err) {
+        console.error('deleteRecommendation failed:', err);
+        toast('Could not delete: ' + (err && err.message ? err.message : 'unknown error'));
+        return;
+      }
+      openHistoryModal(bloggerId);
     }
 
     async function addPerformanceEntry(bloggerId) {
