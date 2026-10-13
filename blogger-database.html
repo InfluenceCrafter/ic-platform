@@ -195,6 +195,11 @@
           <div><label>Posted date</label><input id="h-posted" type="date" /></div>
           <div><label>ER (%) <span class="muted small">(optional)</span></label><input id="h-er" type="number" step="0.01" /></div>
         </div>
+        <label>Project <span class="muted small">(optional — tag it so this post's numbers count toward that campaign's report)</span></label>
+        <select id="h-project">
+          <option value="">— Not tied to a project —</option>
+          ${internalProjects.map((p) => `<option value="${p.id}">${escapeHtml(p.title || 'Untitled project')}</option>`).join('')}
+        </select>
         <div class="grid grid-3">
           <div><label>Views</label><input id="h-views" type="number" min="0" /></div>
           <div><label>Likes</label><input id="h-likes" type="number" min="0" /></div>
@@ -210,7 +215,7 @@
           : entries.map((h) => `
             <div class="card-row" style="align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line-soft);">
               <div>
-                <div><strong>${h.postedAt ? formatDate(h.postedAt) : '—'}</strong> <span class="muted small">${escapeHtml(h.platform || '')}</span></div>
+                <div><strong>${h.postedAt ? formatDate(h.postedAt) : '—'}</strong> <span class="muted small">${escapeHtml(h.platform || '')}</span>${h.projectId ? ` <span class="tag">${escapeHtml(((db.projects || []).find((p) => p.id === h.projectId) || {}).title || 'Project')}</span>` : ''}</div>
                 <div class="small">${h.views != null ? `👁 ${Number(h.views).toLocaleString()}` : ''} ${h.likes != null ? `· ❤ ${Number(h.likes).toLocaleString()}` : ''} ${h.comments != null ? `· 💬 ${Number(h.comments).toLocaleString()}` : ''} ${h.er != null ? `· ER ${h.er}%` : ''}</div>
                 ${h.contentUrl ? `<a class="small" href="${escapeHtml(h.contentUrl)}" target="_blank" rel="noopener">Open content</a>` : ''}
                 ${h.notes ? `<div class="small muted" style="margin-top:4px;">${escapeHtml(h.notes)}</div>` : ''}
@@ -335,6 +340,7 @@
       try {
         const fields = {
           bloggerId,
+          projectId: document.getElementById('h-project').value || null,
           contentUrl: document.getElementById('h-url').value.trim(),
           platform: document.getElementById('h-platform').value,
           postedAt: document.getElementById('h-posted').value || null,

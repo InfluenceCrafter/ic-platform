@@ -74,7 +74,7 @@ const TABLES = {
   },
   bloggerPerformanceHistory: {
     table: 'blogger_performance_history',
-    map: { id: 'id', bloggerId: 'blogger_id', contentUrl: 'content_url', platform: 'platform', postedAt: 'posted_at', views: 'views', likes: 'likes', comments: 'comments', shares: 'shares', er: 'er', source: 'source', notes: 'notes', createdAt: 'created_at' },
+    map: { id: 'id', bloggerId: 'blogger_id', projectId: 'project_id', contentUrl: 'content_url', platform: 'platform', postedAt: 'posted_at', views: 'views', likes: 'likes', comments: 'comments', shares: 'shares', er: 'er', source: 'source', notes: 'notes', createdAt: 'created_at' },
   },
   aiRecommendations: {
     table: 'ai_recommendations',

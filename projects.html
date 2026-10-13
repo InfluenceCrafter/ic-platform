@@ -29,7 +29,9 @@
     let view = 'list'; // 'list' | 'detail'
     let activeProjectId = null;
     let projectStatusFilter = '';
-    let rosterGroupFilter = ''; // filters the open roster drawer's table by group_label
+    let projectListView = 'grid'; // 'grid' | 'kanban' — list-view display mode
+    let projectDetailTab = 'overview'; // 'overview' | 'roster' | 'tasks' | 'reporting'
+    let rosterGroupFilter = ''; // filters the inline roster tab's table by group_label
 
     /* State for the "Add blogger to project" modal's filters — reset each
        time the modal opens (see openAddBloggerModal). */
@@ -136,7 +138,13 @@
       return `
         <div class="card-row" style="align-items:center;margin-bottom:18px;">
           <h1 style="margin:0;">Projects</h1>
-          <button class="btn btn-primary" onclick="openProjectModal()">+ New Project</button>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <div class="chip-select" style="margin:0;">
+              <div class="chip ${projectListView === 'grid' ? 'selected' : ''}" onclick="setProjectListView('grid')">Grid</div>
+              <div class="chip ${projectListView === 'kanban' ? 'selected' : ''}" onclick="setProjectListView('kanban')">Kanban</div>
+            </div>
+            <button class="btn btn-primary" onclick="openProjectModal()">+ New Project</button>
+          </div>
         </div>
         <div class="chip-select" style="margin-bottom:18px;">
           <div class="chip ${!projectStatusFilter ? 'selected' : ''}" onclick="setProjectStatusFilter('')">All</div>
@@ -146,8 +154,66 @@
         </div>
         ${projects.length === 0
           ? `<div class="empty-state"><p>No projects yet.</p><button class="btn btn-primary btn-sm" onclick="openProjectModal()">+ New Project</button></div>`
-          : `<div class="grid grid-3">${projects.map(projectCard).join('')}</div>`}
+          : projectListView === 'kanban'
+            ? renderProjectKanban(projects)
+            : `<div class="grid grid-3">${projects.map(projectCard).join('')}</div>`}
       `;
+    }
+
+    function setProjectListView(mode) { projectListView = mode; render(); }
+
+    /* Kanban board grouped by deal stage (DEAL_STATUS_META keys) — lets the
+       admin see the whole pipeline at a glance and drag-free re-stage a
+       project via the inline <select> without opening the full edit modal. */
+    function renderProjectKanban(projects) {
+      const columns = Object.entries(DEAL_STATUS_META).map(([key, meta]) => ({
+        key,
+        label: meta.label,
+        items: projects.filter((p) => (p.dealStatus || 'lead') === key),
+      }));
+      return `
+        <div style="display:flex;gap:14px;overflow-x:auto;padding-bottom:8px;">
+          ${columns
+            .map(
+              (col) => `
+            <div style="flex:0 0 260px;min-width:260px;">
+              <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px;">${escapeHtml(col.label)} <span class="muted">(${col.items.length})</span></div>
+              <div style="display:flex;flex-direction:column;gap:10px;">
+                ${col.items.map(kanbanCard).join('') || '<div class="small muted" style="padding:10px;border:1px dashed var(--line);border-radius:var(--radius-sm);">No projects</div>'}
+              </div>
+            </div>`
+            )
+            .join('')}
+        </div>
+      `;
+    }
+
+    function kanbanCard(p) {
+      const roster = projectRoster(p.id);
+      const risk = roster.filter((r) => r.visitTrackStatus === 'at_risk' || r.visitTrackStatus === 'find_replacement').length;
+      return `
+        <div class="card" style="padding:12px;cursor:pointer;" onclick="openProject('${p.id}')">
+          <div style="font-weight:600;margin-bottom:4px;">${escapeHtml(p.title)}</div>
+          ${p.category ? `<span class="tag">${escapeHtml(p.category)}</span>` : ''}
+          <div class="small muted" style="margin-top:6px;">👥 ${roster.length}${risk ? ` · <span style="color:var(--orange);font-weight:700;">${risk} ⚠</span>` : ''}</div>
+          <select onclick="event.stopPropagation()" onmousedown="event.stopPropagation()" onchange="event.stopPropagation();quickSetDealStatus('${p.id}',this.value)" style="margin-top:8px;width:100%;">
+            ${Object.entries(DEAL_STATUS_META).map(([k, m]) => `<option value="${k}" ${p.dealStatus === k ? 'selected' : ''}>${m.label}</option>`).join('')}
+          </select>
+        </div>
+      `;
+    }
+
+    async function quickSetDealStatus(projectId, status) {
+      try {
+        const updated = await dbUpdate('projects', projectId, { dealStatus: status });
+        const idx = db.projects.findIndex((x) => x.id === projectId);
+        if (idx >= 0) db.projects[idx] = updated;
+      } catch (err) {
+        console.error('quickSetDealStatus failed:', err);
+        toast('Could not update deal stage: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        render();
+      }
     }
 
     function projectCard(p) {
@@ -172,14 +238,18 @@
     }
 
     function setProjectStatusFilter(status) { projectStatusFilter = status; render(); }
-    function openProject(id) { activeProjectId = id; view = 'detail'; render(); }
+    function openProject(id) { activeProjectId = id; view = 'detail'; projectDetailTab = 'overview'; rosterGroupFilter = ''; render(); }
     function backToProjects() { view = 'list'; activeProjectId = null; render(); }
 
     /* ---------------- Detail view ---------------- */
+    /* Tabbed workspace (Overview / Roster & Content / Tasks / Reporting),
+       modelled on how Grin/Aspire/CreatorIQ structure a campaign page —
+       the roster lives inline in its own tab instead of behind an extra
+       drawer click, and a persistent KPI strip stays visible across tabs
+       so health-at-a-glance doesn't require switching tabs to see it. */
     function renderProjectDetail() {
       const p = db.projects.find((x) => x.id === activeProjectId);
       if (!p) { view = 'list'; activeProjectId = null; return renderProjectList(); }
-      const roster = projectRoster(p.id);
 
       return `
         <button class="btn btn-ghost btn-sm" style="margin-bottom:14px;" onclick="backToProjects()">← All projects</button>
@@ -196,24 +266,108 @@
               <button class="btn btn-danger btn-sm" onclick="deleteProject('${p.id}')">Delete</button>
             </div>
           </div>
-          <hr class="divider" />
-          <div class="grid grid-2">
-            <div>
-              <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Brief</div>
-              <p style="white-space:pre-wrap;">${p.brief ? escapeHtml(p.brief) : '<span class="muted">No brief added yet.</span>'}</p>
-              ${p.briefPdfLink ? `<a class="small" href="${escapeHtml(p.briefPdfLink)}" target="_blank" rel="noopener">📄 Presentation (PDF)</a>` : ''}
-            </div>
-            <div>
-              <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Address</div>
-              <p>${p.address ? escapeHtml(p.address) : '<span class="muted">—</span>'}</p>
-              <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Deliverables</div>
-              <p style="white-space:pre-wrap;">${p.deliverables ? escapeHtml(p.deliverables) : '<span class="muted">—</span>'}</p>
-            </div>
+        </div>
+        <div id="project-dynamic-area">${projectDynamicArea(p)}</div>
+      `;
+    }
+
+    /* Everything that changes without a page-level navigation (KPI numbers,
+       the active tab, the tab's own content) lives inside one wrapper div
+       so a single targeted refresh (refreshProjectDetailTab) can update it
+       all at once after a roster/task edit, without losing scroll position
+       by re-rendering the whole page. */
+    function projectDynamicArea(p) {
+      const roster = projectRoster(p.id);
+      return `
+        ${projectKpiStrip(p, roster)}
+        <div class="tabs" style="margin:16px 0;">
+          <button class="${projectDetailTab === 'overview' ? 'active' : ''}" onclick="switchProjectTab('overview')">Overview</button>
+          <button class="${projectDetailTab === 'roster' ? 'active' : ''}" onclick="switchProjectTab('roster')">Roster &amp; Content</button>
+          <button class="${projectDetailTab === 'tasks' ? 'active' : ''}" onclick="switchProjectTab('tasks')">Tasks</button>
+          <button class="${projectDetailTab === 'reporting' ? 'active' : ''}" onclick="switchProjectTab('reporting')">Reporting</button>
+        </div>
+        <div id="project-tab-content">${projectTabContent(p)}</div>
+      `;
+    }
+
+    function switchProjectTab(tab) {
+      projectDetailTab = tab;
+      if (tab === 'roster') rosterGroupFilter = '';
+      render();
+    }
+
+    /* Targeted refresh — replaces every old renderRosterAndRefresh() call
+       site now that the roster lives inline instead of in a drawer. Re-reads
+       `p` fresh so stale closures over an edited/deleted project can't happen. */
+    function refreshProjectDetailTab() {
+      const p = db.projects.find((x) => x.id === activeProjectId);
+      const el = document.getElementById('project-dynamic-area');
+      if (!p || !el) return;
+      el.innerHTML = projectDynamicArea(p);
+    }
+
+    function projectTabContent(p) {
+      if (projectDetailTab === 'roster') return projectRosterTab(p);
+      if (projectDetailTab === 'tasks') return renderChecklistCard(p);
+      if (projectDetailTab === 'reporting') return projectReportingTab(p);
+      return projectOverviewTab(p);
+    }
+
+    /* Persistent health-at-a-glance bar, visible regardless of which tab is
+       active — the pattern CreatorIQ/Aspire use on a campaign workspace so
+       you don't have to hop tabs just to see if anything needs attention. */
+    function projectKpiStrip(p, roster) {
+      const atRisk = roster.filter((r) => r.visitTrackStatus === 'at_risk' || r.visitTrackStatus === 'find_replacement').length;
+      const live = roster.filter((r) => r.contentStatus === 'live').length;
+      const livePct = roster.length ? Math.round((live / roster.length) * 100) : 0;
+      const daysLeft = p.contentDeadline ? Math.ceil((new Date(p.contentDeadline) - new Date()) / 86400000) : null;
+      const overdue = daysLeft != null && daysLeft < 0;
+      return `
+        <div class="card-row" style="gap:10px;flex-wrap:wrap;">
+          <div class="card" style="flex:1;min-width:140px;padding:12px 16px;text-align:center;">
+            <div style="font-size:22px;font-weight:700;">${roster.length}</div>
+            <div class="small muted">Bloggers</div>
           </div>
-          <div class="grid grid-3">
-            <div><div class="small muted" style="font-weight:700;">Dates</div><div>${p.startDate ? formatDate(p.startDate) : '—'} → ${p.endDate ? formatDate(p.endDate) : '—'}</div></div>
-            <div><div class="small muted" style="font-weight:700;">Content deadline</div><div>${p.contentDeadline ? formatDate(p.contentDeadline) : '—'}</div></div>
-            <div><div class="small muted" style="font-weight:700;">Notes</div><div>${p.notes ? escapeHtml(p.notes) : '—'}</div></div>
+          <div class="card" style="flex:1;min-width:140px;padding:12px 16px;text-align:center;${atRisk ? 'border-color:var(--orange);' : ''}">
+            <div style="font-size:22px;font-weight:700;${atRisk ? 'color:var(--orange);' : ''}">${atRisk}</div>
+            <div class="small muted">At risk</div>
+          </div>
+          <div class="card" style="flex:1;min-width:140px;padding:12px 16px;text-align:center;">
+            <div style="font-size:22px;font-weight:700;">${live}/${roster.length} <span class="small muted" style="font-weight:400;">(${livePct}%)</span></div>
+            <div class="small muted">Content live</div>
+          </div>
+          <div class="card" style="flex:1;min-width:140px;padding:12px 16px;text-align:center;${overdue ? 'border-color:var(--red);' : ''}">
+            <div style="font-size:22px;font-weight:700;${overdue ? 'color:var(--red);' : ''}">${daysLeft == null ? '—' : overdue ? Math.abs(daysLeft) + 'd overdue' : daysLeft + 'd'}</div>
+            <div class="small muted">To deadline</div>
+          </div>
+        </div>
+      `;
+    }
+
+    /* ---------------- Overview tab ---------------- */
+    function projectOverviewTab(p) {
+      const roster = projectRoster(p.id);
+      const checklist = projectChecklist(p.id);
+      const done = checklist.filter((i) => i.done).length;
+      return `
+        <div class="grid grid-2">
+          <div class="card">
+            <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Brief</div>
+            <p style="white-space:pre-wrap;">${p.brief ? escapeHtml(p.brief) : '<span class="muted">No brief added yet.</span>'}</p>
+            ${p.briefPdfLink ? `<a class="small" href="${escapeHtml(p.briefPdfLink)}" target="_blank" rel="noopener">📄 Presentation (PDF)</a>` : ''}
+            <hr class="divider" />
+            <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Deliverables</div>
+            <p style="white-space:pre-wrap;">${p.deliverables ? escapeHtml(p.deliverables) : '<span class="muted">—</span>'}</p>
+          </div>
+          <div class="card">
+            <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Address</div>
+            <p>${p.address ? escapeHtml(p.address) : '<span class="muted">—</span>'}</p>
+            <div class="grid grid-2" style="margin-top:4px;">
+              <div><div class="small muted" style="font-weight:700;">Dates</div><div>${p.startDate ? formatDate(p.startDate) : '—'} → ${p.endDate ? formatDate(p.endDate) : '—'}</div></div>
+              <div><div class="small muted" style="font-weight:700;">Content deadline</div><div>${p.contentDeadline ? formatDate(p.contentDeadline) : '—'}</div></div>
+            </div>
+            <div class="small muted" style="font-weight:700;margin-top:10px;">Notes</div>
+            <div>${p.notes ? escapeHtml(p.notes) : '—'}</div>
           </div>
         </div>
         <div class="card">
@@ -231,16 +385,112 @@
             </div>
           </div>
         </div>
-        ${renderChecklistCard(p)}
-        <div class="card" style="cursor:pointer;" onclick="openRoster('${p.id}')">
-          <div class="card-row" style="align-items:center;">
-            <div>
-              <h3 style="margin:0;">Bloggers <span class="muted small">(${roster.length})</span></h3>
-              <div class="small muted" style="margin-top:4px;">${roster.length ? rosterQuickSummary(roster) : 'No bloggers added yet'}</div>
+        <div class="grid grid-2">
+          <div class="card" style="cursor:pointer;" onclick="switchProjectTab('roster')">
+            <div class="card-row" style="align-items:center;">
+              <div>
+                <h3 style="margin:0;">Roster <span class="muted small">(${roster.length})</span></h3>
+                <div class="small muted" style="margin-top:4px;">${roster.length ? rosterQuickSummary(roster) : 'No bloggers added yet'}</div>
+              </div>
+              <button class="btn btn-secondary btn-sm">Open roster →</button>
             </div>
-            <button class="btn btn-secondary btn-sm">Open roster →</button>
+          </div>
+          <div class="card" style="cursor:pointer;" onclick="switchProjectTab('tasks')">
+            <div class="card-row" style="align-items:center;">
+              <div>
+                <h3 style="margin:0;">Tasks <span class="muted small">(${done}/${checklist.length})</span></h3>
+                <div class="small muted" style="margin-top:4px;">${checklist.length ? 'Workflow checklist' : 'No checklist yet'}</div>
+              </div>
+              <button class="btn btn-secondary btn-sm">Open tasks →</button>
+            </div>
           </div>
         </div>
+      `;
+    }
+
+    /* ---------------- Reporting tab ---------------- */
+    /* Rolls up blogger_performance_history entries tagged to this project
+       (project_id — see supabase/patch-2026-10-13.sql) into campaign-level
+       totals a brand can actually be handed, plus a per-blogger breakdown
+       and a "missing stats" nudge list for roster members with zero
+       entries logged against this campaign yet. */
+    function projectReportingTab(p) {
+      const roster = projectRoster(p.id);
+      const history = (db.bloggerPerformanceHistory || []).filter((h) => h.projectId === p.id);
+
+      if (history.length === 0) {
+        return `
+          <div class="card">
+            <h3 style="margin-top:0;">Reporting</h3>
+            <p class="muted small">No performance stats tagged to this project yet. Log stats on each blogger's card in Blogger Database (Performance history tab) and pick this project in the "Project" field — the numbers will roll up here automatically, ready to share with the brand.</p>
+          </div>
+        `;
+      }
+
+      const totals = history.reduce(
+        (acc, h) => {
+          acc.views += Number(h.views) || 0;
+          acc.likes += Number(h.likes) || 0;
+          acc.comments += Number(h.comments) || 0;
+          acc.shares += Number(h.shares) || 0;
+          return acc;
+        },
+        { views: 0, likes: 0, comments: 0, shares: 0 }
+      );
+      const ers = history.map((h) => Number(h.er)).filter((n) => !isNaN(n) && n != null);
+      const avgEr = ers.length ? (ers.reduce((a, b) => a + b, 0) / ers.length).toFixed(2) : null;
+
+      const byBlogger = roster
+        .map((pb) => {
+          const b = db.bloggerDirectory.find((x) => x.id === pb.bloggerId);
+          const entries = history.filter((h) => h.bloggerId === pb.bloggerId);
+          const bTotals = entries.reduce(
+            (acc, h) => {
+              acc.views += Number(h.views) || 0;
+              acc.likes += Number(h.likes) || 0;
+              acc.comments += Number(h.comments) || 0;
+              return acc;
+            },
+            { views: 0, likes: 0, comments: 0 }
+          );
+          return { name: b ? b.profileName || 'Untitled blogger' : 'Blogger removed from database', entries: entries.length, ...bTotals };
+        });
+      const missing = byBlogger.filter((r) => r.entries === 0);
+
+      return `
+        <div class="card">
+          <h3 style="margin-top:0;">Campaign totals</h3>
+          <div class="grid grid-3">
+            <div><div class="small muted" style="font-weight:700;">Views</div><div style="font-size:20px;font-weight:700;">${totals.views.toLocaleString()}</div></div>
+            <div><div class="small muted" style="font-weight:700;">Likes</div><div style="font-size:20px;font-weight:700;">${totals.likes.toLocaleString()}</div></div>
+            <div><div class="small muted" style="font-weight:700;">Comments</div><div style="font-size:20px;font-weight:700;">${totals.comments.toLocaleString()}</div></div>
+            <div><div class="small muted" style="font-weight:700;">Shares</div><div style="font-size:20px;font-weight:700;">${totals.shares.toLocaleString()}</div></div>
+            <div><div class="small muted" style="font-weight:700;">Avg ER</div><div style="font-size:20px;font-weight:700;">${avgEr != null ? avgEr + '%' : '—'}</div></div>
+            <div><div class="small muted" style="font-weight:700;">Posts logged</div><div style="font-size:20px;font-weight:700;">${history.length}</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">Per-blogger breakdown</h3>
+          ${
+            byBlogger.filter((r) => r.entries > 0).map(
+              (r) => `
+            <div class="card-row" style="padding:7px 0;border-bottom:1px solid var(--line-soft);">
+              <div style="font-weight:600;">${escapeHtml(r.name)}</div>
+              <div class="small muted">${r.entries} post${r.entries === 1 ? '' : 's'} · ${r.views.toLocaleString()} views · ${r.likes.toLocaleString()} likes · ${r.comments.toLocaleString()} comments</div>
+            </div>`
+            ).join('') || '<p class="muted small">No stats yet.</p>'
+          }
+        </div>
+        ${
+          missing.length
+            ? `
+        <div class="card">
+          <h3 style="margin-top:0;">Missing stats <span class="muted small">(${missing.length})</span></h3>
+          <p class="small muted" style="margin-bottom:8px;">These roster bloggers have no performance entries tagged to this project yet — chase them for stats before sending the report.</p>
+          ${missing.map((r) => `<span class="tag">${escapeHtml(r.name)}</span>`).join(' ')}
+        </div>`
+            : ''
+        }
       `;
     }
 
@@ -283,7 +533,7 @@
         console.error('toggleChecklistItem failed:', err);
         toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
       } finally {
-        render();
+        refreshProjectDetailTab();
       }
     }
 
@@ -299,7 +549,7 @@
         console.error('addChecklistItem failed:', err);
         toast('Could not add step: ' + (err && err.message ? err.message : 'unknown error'));
       } finally {
-        render();
+        refreshProjectDetailTab();
       }
     }
 
@@ -311,7 +561,7 @@
         console.error('removeChecklistItem failed:', err);
         toast('Could not remove step: ' + (err && err.message ? err.message : 'unknown error'));
       } finally {
-        render();
+        refreshProjectDetailTab();
       }
     }
 
@@ -326,18 +576,8 @@
       return parts.join(' · ');
     }
 
-    /* ---------------- Roster drawer ("half tab") ---------------- */
-    function openRoster(projectId) {
-      if (activeProjectId !== projectId) rosterGroupFilter = '';
-      activeProjectId = projectId;
-      document.getElementById('drawer-root').innerHTML = renderRosterDrawer(projectId);
-    }
-    function setRosterGroupFilter(group) { rosterGroupFilter = group; renderRosterAndRefresh(); }
-    function closeRoster() { document.getElementById('drawer-root').innerHTML = ''; render(); }
-    function renderRosterAndRefresh() {
-      const el = document.getElementById('drawer-root');
-      if (el.innerHTML) el.innerHTML = renderRosterDrawer(activeProjectId);
-    }
+    /* ---------------- Roster & Content tab (inline, no drawer) ---------------- */
+    function setRosterGroupFilter(group) { rosterGroupFilter = group; refreshProjectDetailTab(); }
 
     /* Clusters the (possibly group-filtered) roster into ordered sections —
        named groups alphabetically first, "Ungrouped" last — so bloggers in
@@ -356,45 +596,46 @@
       return orderedKeys.map((key) => ({ key, label: key || 'Ungrouped', bloggers: buckets[key] }));
     }
 
-    function renderRosterDrawer(projectId) {
-      const p = db.projects.find((x) => x.id === projectId);
+    function projectRosterTab(p) {
+      const projectId = p.id;
       const roster = projectRoster(projectId);
       const groups = projectGroupValues(projectId);
       const datalistOptions = [...GROUP_PRESETS, ...groups].filter((v, i, a) => a.indexOf(v) === i);
       const sections = groupedRoster(projectId);
       return `
-        <div class="drawer-backdrop" onclick="if(event.target===this) closeRoster()">
-          <div class="drawer">
-            <button class="modal-close" style="float:right;" onclick="closeRoster()">✕</button>
-            <h2 style="margin:0 0 2px;">Bloggers — ${escapeHtml(p.title)}</h2>
-            <p class="small muted" style="margin-bottom:18px;">${roster.length} added</p>
-            <button class="btn btn-primary btn-sm" style="margin-bottom:16px;" onclick="openAddBloggerModal('${projectId}')">+ Add blogger from database</button>
-            ${groups.length
-              ? `<div class="chip-select" style="margin-bottom:18px;">
-                  <div class="chip ${!rosterGroupFilter ? 'selected' : ''}" onclick="setRosterGroupFilter('')">All (${roster.length})</div>
-                  ${groups
-                    .map((g) => {
-                      const count = roster.filter((r) => r.groupLabel === g).length;
-                      return `<div class="chip ${rosterGroupFilter === g ? 'selected' : ''}" data-group="${escapeHtml(g)}" onclick="setRosterGroupFilter(this.dataset.group)">${escapeHtml(g)} (${count})</div>`;
-                    })
-                    .join('')}
-                </div>`
-              : ''}
-            <datalist id="group-suggestions">${datalistOptions.map((g) => `<option value="${escapeHtml(g)}"></option>`).join('')}</datalist>
-            ${roster.length === 0
-              ? `<div class="empty-state"><p>No bloggers added to this project yet.</p></div>`
-              : sections
-                  .map(
-                    (section) => `
-                <div class="roster-group">
-                  ${sections.length > 1 || section.key !== ''
-                    ? `<div class="roster-group-title">${escapeHtml(section.label)} <span class="count">(${section.bloggers.length})</span></div>`
-                    : ''}
-                  <div class="roster-cards">${section.bloggers.map(rosterCard).join('')}</div>
-                </div>`
-                  )
-                  .join('')}
+        <div class="card">
+          <div class="card-row" style="align-items:center;margin-bottom:6px;">
+            <div>
+              <h3 style="margin:0;">Roster <span class="muted small">(${roster.length})</span></h3>
+              <p class="small muted" style="margin:2px 0 0;">${roster.length} added</p>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="openAddBloggerModal('${projectId}')">+ Add blogger from database</button>
           </div>
+          ${groups.length
+            ? `<div class="chip-select" style="margin:14px 0;">
+                <div class="chip ${!rosterGroupFilter ? 'selected' : ''}" onclick="setRosterGroupFilter('')">All (${roster.length})</div>
+                ${groups
+                  .map((g) => {
+                    const count = roster.filter((r) => r.groupLabel === g).length;
+                    return `<div class="chip ${rosterGroupFilter === g ? 'selected' : ''}" data-group="${escapeHtml(g)}" onclick="setRosterGroupFilter(this.dataset.group)">${escapeHtml(g)} (${count})</div>`;
+                  })
+                  .join('')}
+              </div>`
+            : ''}
+          <datalist id="group-suggestions">${datalistOptions.map((g) => `<option value="${escapeHtml(g)}"></option>`).join('')}</datalist>
+          ${roster.length === 0
+            ? `<div class="empty-state"><p>No bloggers added to this project yet.</p></div>`
+            : sections
+                .map(
+                  (section) => `
+              <div class="roster-group">
+                ${sections.length > 1 || section.key !== ''
+                  ? `<div class="roster-group-title">${escapeHtml(section.label)} <span class="count">(${section.bloggers.length})</span></div>`
+                  : ''}
+                <div class="roster-cards">${section.bloggers.map(rosterCard).join('')}</div>
+              </div>`
+                )
+                .join('')}
         </div>
       `;
     }
@@ -485,7 +726,7 @@
         console.error('updateRoster failed:', err);
         toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
       } finally {
-        renderRosterAndRefresh();
+        refreshProjectDetailTab();
       }
     }
 
@@ -501,7 +742,7 @@
         console.error('toggleContentFormat failed:', err);
         toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
       } finally {
-        renderRosterAndRefresh();
+        refreshProjectDetailTab();
       }
     }
 
@@ -518,7 +759,7 @@
         console.error('toggleBoolField failed:', err);
         toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
       } finally {
-        renderRosterAndRefresh();
+        refreshProjectDetailTab();
       }
     }
 
@@ -536,7 +777,7 @@
         console.error('updateContentLink failed:', err);
         toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
       } finally {
-        renderRosterAndRefresh();
+        refreshProjectDetailTab();
       }
     }
 
@@ -550,8 +791,7 @@
         console.error('removeFromRoster failed:', err);
         toast('Could not remove: ' + (err && err.message ? err.message : 'unknown error'));
       }
-      renderRosterAndRefresh();
-      render();
+      refreshProjectDetailTab();
     }
 
     /* ---------------- AI script generation, scoped to this project's brief ---------------- */
@@ -778,7 +1018,7 @@
         db.projectBloggers.push(row);
         toast('Blogger added.');
         renderAddBloggerResults(projectId);
-        renderRosterAndRefresh();
+        refreshProjectDetailTab();
       } catch (err) {
         console.error('addBloggerToProject failed:', err);
         toast('Could not add: ' + (err && err.message ? err.message : 'unknown error'));
