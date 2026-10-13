@@ -38,6 +38,7 @@
     let addBloggerSortBy = 'name'; // 'name' | 'followers'
     let addBloggerNicheFilter = ''; // matches against blogger.category tags
     let addBloggerCountryFilter = ''; // matches against blogger.audienceCountries[0]
+    let aiMatchLoading = false; // guards against double-submitting the AI-match request
 
     (async function () {
       const ctx = await requireRole(['admin']);
@@ -414,6 +415,7 @@
             </div>
             <div class="roster-card-top-right">
               <input class="roster-group-input" list="group-suggestions" value="${escapeHtml(pb.groupLabel || '')}" onchange="updateRoster('${pb.id}','groupLabel',this.value)" placeholder="Group…" />
+              <button class="btn btn-ghost btn-sm" onclick="generateScriptForRoster('${pb.id}')" title="Generate AI script for this project">✨ AI script</button>
               <button class="btn btn-ghost btn-sm" onclick="removeFromRoster('${pb.id}')" title="Remove from project">✕</button>
             </div>
           </div>
@@ -552,6 +554,77 @@
       render();
     }
 
+    /* ---------------- AI script generation, scoped to this project's brief ---------------- */
+    function bloggerHistoryFor(bloggerId) {
+      return (db.bloggerPerformanceHistory || [])
+        .filter((h) => h.bloggerId === bloggerId)
+        .sort((a, c) => new Date(c.postedAt || c.createdAt || 0) - new Date(a.postedAt || a.createdAt || 0));
+    }
+
+    async function generateScriptForRoster(pbId) {
+      const pb = db.projectBloggers.find((x) => x.id === pbId);
+      const b = pb && db.bloggerDirectory.find((x) => x.id === pb.bloggerId);
+      const p = pb && db.projects.find((x) => x.id === pb.projectId);
+      if (!pb || !b || !p) return;
+
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">×</button>
+            <h2 style="margin-top:0;">✨ AI script — ${escapeHtml(b.profileName)}</h2>
+            <div class="small muted" style="margin-bottom:10px;">For project: ${escapeHtml(p.title)}</div>
+            <div id="ai-script-result" class="small muted">Generating…</div>
+          </div>
+        </div>`;
+
+      try {
+        const payload = {
+          blogger: {
+            name: b.profileName,
+            category: b.category || [],
+            pastBrands: b.pastBrands || [],
+            city: b.city || '',
+            audienceCountry: (b.audienceCountries || [])[0] || '',
+            followers: b.followersCount || null,
+            er: b.engagementRate || null,
+          },
+          history: bloggerHistoryFor(b.id).slice(0, 10).map((h) => ({
+            platform: h.platform,
+            views: h.views,
+            likes: h.likes,
+            comments: h.comments,
+            er: h.er,
+            notes: h.notes,
+          })),
+          brief: p.brief || undefined,
+        };
+        const res = await fetch('/api/generate-script', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+        const row = await dbInsert('aiRecommendations', {
+          bloggerId: b.id,
+          projectId: p.id,
+          content: data.content,
+          model: 'claude-opus-4-7',
+          status: 'draft',
+          createdAt: nowISO(),
+        });
+        db.aiRecommendations = db.aiRecommendations || [];
+        db.aiRecommendations.push(row);
+        const el = document.getElementById('ai-script-result');
+        if (el) el.outerHTML = `<div class="small" style="white-space:pre-wrap;">${escapeHtml(data.content)}</div>`;
+        toast('Script generated and saved — view it on the blogger\'s card in Blogger Database.');
+      } catch (err) {
+        console.error('generateScriptForRoster failed:', err);
+        const el = document.getElementById('ai-script-result');
+        if (el) el.textContent = 'Could not generate: ' + (err && err.message ? err.message : 'unknown error');
+      }
+    }
+
     /* ---------------- Add blogger to project (from directory) ---------------- */
     function openAddBloggerModal(projectId) {
       addBloggerCityFilter = '';
@@ -590,6 +663,15 @@
                 <option value="name">Alphabetical</option>
                 <option value="followers">Followers (high→low)</option>
               </select>
+            </div>
+            <div style="margin-bottom:14px;border-top:1px solid var(--line-soft);padding-top:12px;">
+              <button class="btn btn-ghost btn-sm" onclick="toggleAiMatchPanel()">✨ AI-подбор по брифу</button>
+              <div id="ai-match-panel" style="display:none;margin-top:10px;">
+                <div class="small muted" style="margin-bottom:6px;">Опиши своими словами кого ищешь (бренд, нишу, город, аудиторию, исключения) — учтёт фильтры выше, статистику и прошлые бренд-коллаборации каждого блогера.</div>
+                <textarea id="ai-match-brief" rows="3" placeholder="Напр.: ищу 5 фуд-блогеров в Праге для бургерной, аудитория 20-35, не из прямых конкурентов, желательно с хорошим ER на Reels"></textarea>
+                <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="runAiMatch('${projectId}')">Найти подходящих блогеров</button>
+                <div id="ai-match-results" style="margin-top:10px;"></div>
+              </div>
             </div>
             <div id="add-blogger-results"></div>
           </div>
@@ -701,6 +783,101 @@
         console.error('addBloggerToProject failed:', err);
         toast('Could not add: ' + (err && err.message ? err.message : 'unknown error'));
       }
+    }
+
+    /* AI-driven blogger matching for a new campaign wave: admin describes
+       the brief in free text, Claude ranks the current candidate pool
+       (respecting whatever manual filters are already set above) using
+       each blogger's profile, performance history and past brand
+       collaborations (internal projects + external pastBrands tags). */
+    function toggleAiMatchPanel() {
+      const panel = document.getElementById('ai-match-panel');
+      if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    }
+
+    async function runAiMatch(projectId) {
+      if (aiMatchLoading) return;
+      const briefEl = document.getElementById('ai-match-brief');
+      const resultsEl = document.getElementById('ai-match-results');
+      const brief = (briefEl && briefEl.value || '').trim();
+      const already = new Set(projectRoster(projectId).map((pb) => pb.bloggerId));
+      let pool = db.bloggerDirectory
+        .filter((b) => !already.has(b.id))
+        .filter((b) => !addBloggerCityFilter || (b.city || '').trim().toLowerCase() === addBloggerCityFilter)
+        .filter((b) => !addBloggerNicheFilter || (b.category || []).some((c) => c.trim().toLowerCase() === addBloggerNicheFilter))
+        .filter((b) => !addBloggerCountryFilter || (b.audienceCountries || [])[0] === addBloggerCountryFilter);
+
+      if (addBloggerHistoryFilter === 'new') pool = pool.filter((b) => bloggerProjectHistory(b.id, projectId).length === 0);
+      if (addBloggerHistoryFilter === 'returning') pool = pool.filter((b) => bloggerProjectHistory(b.id, projectId).length > 0);
+
+      if (pool.length === 0) {
+        resultsEl.innerHTML = '<p class="small muted">Нет кандидатов под текущие фильтры выше — ослабь фильтр и попробуй снова.</p>';
+        return;
+      }
+
+      const capped = pool.length > 60
+        ? [...pool].sort((a, c) => (Number(c.followersCount) || 0) - (Number(a.followersCount) || 0)).slice(0, 60)
+        : pool;
+
+      aiMatchLoading = true;
+      resultsEl.innerHTML = `<p class="small muted">Анализирую ${capped.length} кандидат${capped.length === 1 ? 'а' : 'ов'}…</p>`;
+
+      try {
+        const candidates = capped.map((b) => ({
+          id: b.id,
+          name: b.profileName,
+          category: b.category || [],
+          city: b.city || '',
+          audienceCountry: (b.audienceCountries || [])[0] || '',
+          followers: b.followersCount || null,
+          er: b.engagementRate || null,
+          pastBrands: b.pastBrands || [],
+          internalProjects: bloggerProjectHistory(b.id, projectId).map((p) => p.title),
+          historyNotes: bloggerHistoryFor(b.id)
+            .slice(0, 5)
+            .map((h) => `${h.platform || ''} ER:${h.er ?? '—'}% views:${h.views ?? '—'} ${h.notes || ''}`.trim())
+            .join('; '),
+        }));
+
+        const res = await fetch('/api/match-bloggers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brief, candidates }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+
+        const byId = new Map(capped.map((b) => [b.id, b]));
+        const ranked = (data.matches || []).filter((m) => byId.has(m.bloggerId));
+
+        resultsEl.innerHTML = ranked.length === 0
+          ? '<p class="small muted">AI не вернул ранжированный список.</p>'
+          : ranked
+              .map((m, i) => {
+                const b = byId.get(m.bloggerId);
+                return `
+          <div class="card-row" id="ai-match-row-${b.id}" style="padding:9px 0;border-bottom:1px solid var(--line-soft);align-items:center;">
+            <div>
+              <div style="font-weight:600;">#${i + 1} ${escapeHtml(b.profileName || 'Untitled blogger')}</div>
+              <div class="small muted">${escapeHtml(b.city || '')}${b.followersCount != null ? ' · ' + Number(b.followersCount).toLocaleString() + ' followers' : ''}</div>
+              <div class="small" style="margin-top:3px;">${escapeHtml(m.reason || '')}</div>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="addFromAiMatch('${projectId}','${b.id}')">+ Add</button>
+          </div>`;
+              })
+              .join('');
+      } catch (err) {
+        console.error('runAiMatch failed:', err);
+        resultsEl.innerHTML = `<p class="small" style="color:#c0392b;">Не получилось получить подбор: ${escapeHtml(err && err.message ? err.message : 'unknown error')}</p>`;
+      } finally {
+        aiMatchLoading = false;
+      }
+    }
+
+    async function addFromAiMatch(projectId, bloggerId) {
+      await addBloggerToProject(projectId, bloggerId);
+      const row = document.getElementById('ai-match-row-' + bloggerId);
+      if (row) row.remove();
     }
 
     /* ---------------- Project create/edit modal ---------------- */

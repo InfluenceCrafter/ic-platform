@@ -10,6 +10,7 @@
   <nav id="nav"></nav>
   <div class="page" id="app"></div>
   <div id="modal-root"></div>
+  <div id="drawer-root"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.8/dist/umd/supabase.js"></script>
   <script src="js/supabase-client.js"></script>
@@ -140,74 +141,111 @@
         .sort((a, b) => new Date(b.postedAt || b.createdAt || 0) - new Date(a.postedAt || a.createdAt || 0));
     }
 
-    function openHistoryModal(bloggerId) {
-      const b = db.bloggerDirectory.find((x) => x.id === bloggerId);
-      if (!b) return;
-      const entries = bloggerHistory(bloggerId);
-      const recs = aiRecommendationsForBlogger(bloggerId);
-      document.getElementById('modal-root').innerHTML = `
-        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
-          <div class="modal">
-            <button class="modal-close" onclick="closeModal()">×</button>
-            <h2 style="margin-top:0;">Performance history — ${escapeHtml(b.profileName)}</h2>
-            <div class="small muted" style="margin-bottom:10px;">Manual entries for now — add one per published video/post to track what's taking off over time.</div>
-            <div class="grid grid-2">
-              <div><label>Content link</label><input id="h-url" placeholder="https://instagram.com/reel/…" /></div>
-              <div><label>Platform</label><select id="h-platform">${PERF_PLATFORM_OPTIONS.map((p) => `<option value="${p}">${p}</option>`).join('')}</select></div>
-            </div>
-            <div class="grid grid-2">
-              <div><label>Posted date</label><input id="h-posted" type="date" /></div>
-              <div><label>ER (%) <span class="muted small">(optional)</span></label><input id="h-er" type="number" step="0.01" /></div>
-            </div>
-            <div class="grid grid-3">
-              <div><label>Views</label><input id="h-views" type="number" min="0" /></div>
-              <div><label>Likes</label><input id="h-likes" type="number" min="0" /></div>
-              <div><label>Comments</label><input id="h-comments" type="number" min="0" /></div>
-            </div>
-            <div><label>Shares</label><input id="h-shares" type="number" min="0" /></div>
-            <label>Notes</label>
-            <textarea id="h-notes" placeholder="Why it did (or didn't) work…"></textarea>
-            <button class="btn btn-primary btn-block" style="margin-top:10px;" onclick="addPerformanceEntry('${bloggerId}')">+ Add entry</button>
-            <hr class="divider" style="margin:18px 0;" />
-            ${entries.length === 0
-              ? '<div class="small muted">No entries yet.</div>'
-              : entries.map((h) => `
-                <div class="card-row" style="align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line-soft);">
-                  <div>
-                    <div><strong>${h.postedAt ? formatDate(h.postedAt) : '—'}</strong> <span class="muted small">${escapeHtml(h.platform || '')}</span></div>
-                    <div class="small">${h.views != null ? `👁 ${Number(h.views).toLocaleString()}` : ''} ${h.likes != null ? `· ❤ ${Number(h.likes).toLocaleString()}` : ''} ${h.comments != null ? `· 💬 ${Number(h.comments).toLocaleString()}` : ''} ${h.er != null ? `· ER ${h.er}%` : ''}</div>
-                    ${h.contentUrl ? `<a class="small" href="${escapeHtml(h.contentUrl)}" target="_blank" rel="noopener">Open content</a>` : ''}
-                    ${h.notes ? `<div class="small muted" style="margin-top:4px;">${escapeHtml(h.notes)}</div>` : ''}
-                  </div>
-                  <button class="btn btn-ghost btn-sm" onclick="deletePerformanceEntry('${h.id}', '${bloggerId}')">✕</button>
-                </div>
-              `).join('')}
-
-            <hr class="divider" style="margin:18px 0;" />
-            <h3 style="margin:0 0 6px;">✨ AI content recommendation</h3>
-            <div class="small muted" style="margin-bottom:10px;">Uses this creator's profile + the performance history above to suggest a content angle and short script.</div>
-            <label>Project brief <span class="muted small">(optional)</span></label>
-            <textarea id="h-brief" placeholder="Paste the brand/project brief here to tailor the recommendation…"></textarea>
-            <button id="h-generate-btn" class="btn btn-primary btn-block" style="margin-top:10px;" onclick="generateScript('${bloggerId}')">✨ Generate script</button>
-            ${recs.length === 0
-              ? '<div class="small muted" style="margin-top:14px;">No recommendations generated yet.</div>'
-              : recs.map((r) => `
-                <div class="card-row" style="align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line-soft);margin-top:10px;">
-                  <div>
-                    <div class="small muted">${r.createdAt ? formatDate(r.createdAt) : ''} · ${escapeHtml(r.model || '')} · ${escapeHtml(r.status || 'draft')}</div>
-                    <div class="small" style="white-space:pre-wrap;margin-top:4px;">${escapeHtml(r.content)}</div>
-                  </div>
-                  <button class="btn btn-ghost btn-sm" onclick="deleteRecommendation('${r.id}', '${bloggerId}')">✕</button>
-                </div>
-              `).join('')}
-          </div>
-        </div>`;
+    /* Our own projects this blogger has been part of — pulled automatically
+       from project_bloggers/projects, no manual entry needed (distinct from
+       pastBrands, which covers brand work outside/before this platform). */
+    function internalProjectHistory(bloggerId) {
+      return (db.projectBloggers || [])
+        .filter((pb) => pb.bloggerId === bloggerId)
+        .map((pb) => {
+          const p = (db.projects || []).find((x) => x.id === pb.projectId);
+          return p ? { ...p, groupLabel: pb.groupLabel } : null;
+        })
+        .filter(Boolean)
+        .sort((a, c) => new Date(c.startDate || c.createdAt || 0) - new Date(a.startDate || a.createdAt || 0));
     }
 
     function aiRecommendationsForBlogger(bloggerId) {
       return (db.aiRecommendations || [])
         .filter((r) => r.bloggerId === bloggerId)
         .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    }
+
+    /* ---------------- Tabbed blogger card (History tab content) ---------------- */
+    function bloggerHistoryTabHtml(b) {
+      const entries = bloggerHistory(b.id);
+      const internalProjects = internalProjectHistory(b.id);
+      return `
+        <h3 style="margin:0 0 6px;">Collaborations with our projects</h3>
+        ${internalProjects.length === 0
+          ? '<div class="small muted" style="margin-bottom:14px;">No internal project collaborations yet.</div>'
+          : `<div style="margin-bottom:14px;">${internalProjects.map((p) => `
+              <div class="card-row" style="align-items:center;padding:6px 0;border-bottom:1px solid var(--line-soft);">
+                <div>
+                  <strong>${escapeHtml(p.title || 'Untitled project')}</strong>
+                  ${p.groupLabel ? `<span class="small muted"> · ${escapeHtml(p.groupLabel)}</span>` : ''}
+                  <div class="small muted">${p.startDate ? formatDate(p.startDate) : '—'}</div>
+                </div>
+                ${badge(p.status)}
+              </div>
+            `).join('')}</div>`}
+
+        ${(b.pastBrands && b.pastBrands.length)
+          ? `<div class="small" style="margin-bottom:14px;"><span class="muted">Other brand collaborations:</span> ${b.pastBrands.map((x) => `<span class="tag">${escapeHtml(x)}</span>`).join(' ')} <button class="btn btn-ghost btn-sm" onclick="switchBloggerCardTab('profile')">Edit in Profile</button></div>`
+          : ''}
+
+        <hr class="divider" style="margin:16px 0;" />
+        <h3 style="margin:0 0 6px;">Performance history</h3>
+        <div class="small muted" style="margin-bottom:10px;">Manual entries for now — add one per published video/post to track what's taking off over time.</div>
+        <div class="grid grid-2">
+          <div><label>Content link</label><input id="h-url" placeholder="https://instagram.com/reel/…" /></div>
+          <div><label>Platform</label><select id="h-platform">${PERF_PLATFORM_OPTIONS.map((p) => `<option value="${p}">${p}</option>`).join('')}</select></div>
+        </div>
+        <div class="grid grid-2">
+          <div><label>Posted date</label><input id="h-posted" type="date" /></div>
+          <div><label>ER (%) <span class="muted small">(optional)</span></label><input id="h-er" type="number" step="0.01" /></div>
+        </div>
+        <div class="grid grid-3">
+          <div><label>Views</label><input id="h-views" type="number" min="0" /></div>
+          <div><label>Likes</label><input id="h-likes" type="number" min="0" /></div>
+          <div><label>Comments</label><input id="h-comments" type="number" min="0" /></div>
+        </div>
+        <div><label>Shares</label><input id="h-shares" type="number" min="0" /></div>
+        <label>Notes</label>
+        <textarea id="h-notes" placeholder="Why it did (or didn't) work…"></textarea>
+        <button class="btn btn-primary btn-block" style="margin-top:10px;" onclick="addPerformanceEntry('${b.id}')">+ Add entry</button>
+        <hr class="divider" style="margin:18px 0;" />
+        ${entries.length === 0
+          ? '<div class="small muted">No entries yet.</div>'
+          : entries.map((h) => `
+            <div class="card-row" style="align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line-soft);">
+              <div>
+                <div><strong>${h.postedAt ? formatDate(h.postedAt) : '—'}</strong> <span class="muted small">${escapeHtml(h.platform || '')}</span></div>
+                <div class="small">${h.views != null ? `👁 ${Number(h.views).toLocaleString()}` : ''} ${h.likes != null ? `· ❤ ${Number(h.likes).toLocaleString()}` : ''} ${h.comments != null ? `· 💬 ${Number(h.comments).toLocaleString()}` : ''} ${h.er != null ? `· ER ${h.er}%` : ''}</div>
+                ${h.contentUrl ? `<a class="small" href="${escapeHtml(h.contentUrl)}" target="_blank" rel="noopener">Open content</a>` : ''}
+                ${h.notes ? `<div class="small muted" style="margin-top:4px;">${escapeHtml(h.notes)}</div>` : ''}
+              </div>
+              <button class="btn btn-ghost btn-sm" onclick="deletePerformanceEntry('${h.id}', '${b.id}')">✕</button>
+            </div>
+          `).join('')}
+      `;
+    }
+
+    /* ---------------- Tabbed blogger card (AI recommendations tab content) ---------------- */
+    const REC_STATUS_OPTIONS = ['draft', 'sent', 'archived'];
+
+    function bloggerAiTabHtml(b) {
+      const recs = aiRecommendationsForBlogger(b.id);
+      return `
+        <div class="small muted" style="margin-bottom:10px;">Uses this creator's profile + performance history + brand collaborations to suggest a content angle and short script.</div>
+        <label>Project brief <span class="muted small">(optional)</span></label>
+        <textarea id="h-brief" placeholder="Paste the brand/project brief here to tailor the recommendation…"></textarea>
+        <button id="h-generate-btn" class="btn btn-primary btn-block" style="margin-top:10px;" onclick="generateScript('${b.id}')">✨ Generate script</button>
+        ${recs.length === 0
+          ? '<div class="small muted" style="margin-top:14px;">No recommendations generated yet.</div>'
+          : recs.map((r) => `
+            <div class="card-row" style="align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line-soft);margin-top:10px;">
+              <div>
+                <div class="small muted">${r.createdAt ? formatDate(r.createdAt) : ''} · ${escapeHtml(r.model || '')} · <span class="badge ${statusBadgeClass(r.status)}">${escapeHtml(statusLabel(r.status))}</span>${r.projectId ? ` · ${escapeHtml(((db.projects || []).find((p) => p.id === r.projectId) || {}).title || 'Project')}` : ''}</div>
+                <div class="small" style="white-space:pre-wrap;margin-top:4px;">${escapeHtml(r.content)}</div>
+                <div style="margin-top:6px;">
+                  ${REC_STATUS_OPTIONS.filter((s) => s !== r.status).map((s) => `<button class="btn btn-ghost btn-sm" onclick="setRecommendationStatus('${r.id}', '${b.id}', '${s}')">Mark ${s}</button>`).join(' ')}
+                </div>
+              </div>
+              <button class="btn btn-ghost btn-sm" onclick="deleteRecommendation('${r.id}', '${b.id}')">✕</button>
+            </div>
+          `).join('')}
+      `;
     }
 
     async function generateScript(bloggerId) {
@@ -222,6 +260,7 @@
           blogger: {
             name: b.profileName,
             category: b.category || [],
+            pastBrands: b.pastBrands || [],
             city: b.city || '',
             audienceCountry: (b.audienceCountries || [])[0] || '',
             followers: b.followersCount || null,
@@ -260,8 +299,22 @@
         toast('Could not generate: ' + (err && err.message ? err.message : 'unknown error'));
         return;
       } finally {
-        openHistoryModal(bloggerId);
+        renderBloggerCard();
       }
+    }
+
+    async function setRecommendationStatus(id, bloggerId, status) {
+      try {
+        const updated = await dbUpdate('aiRecommendations', id, { status });
+        const idx = db.aiRecommendations.findIndex((x) => x.id === id);
+        if (idx >= 0) db.aiRecommendations[idx] = updated;
+        toast(`Marked as ${status}.`);
+      } catch (err) {
+        console.error('setRecommendationStatus failed:', err);
+        toast('Could not update: ' + (err && err.message ? err.message : 'unknown error'));
+        return;
+      }
+      renderBloggerCard();
     }
 
     async function deleteRecommendation(id, bloggerId) {
@@ -275,7 +328,7 @@
         toast('Could not delete: ' + (err && err.message ? err.message : 'unknown error'));
         return;
       }
-      openHistoryModal(bloggerId);
+      renderBloggerCard();
     }
 
     async function addPerformanceEntry(bloggerId) {
@@ -303,7 +356,7 @@
         toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
         return;
       }
-      openHistoryModal(bloggerId);
+      renderBloggerCard();
     }
 
     async function deletePerformanceEntry(id, bloggerId) {
@@ -317,7 +370,75 @@
         toast('Could not delete: ' + (err && err.message ? err.message : 'unknown error'));
         return;
       }
-      openHistoryModal(bloggerId);
+      renderBloggerCard();
+    }
+
+    /* ---------------- Tabbed blogger card (drawer) ---------------- */
+    let bloggerCardState = { id: null, tab: 'profile' };
+
+    function openBloggerCard(id, tab) {
+      bloggerCardState = { id, tab: tab || 'profile' };
+      renderBloggerCard();
+    }
+
+    function switchBloggerCardTab(tab) {
+      bloggerCardState.tab = tab;
+      renderBloggerCard();
+    }
+
+    function closeBloggerCard() {
+      const root = document.getElementById('drawer-root');
+      if (root) root.innerHTML = '';
+    }
+
+    function renderBloggerCard() {
+      const { id, tab } = bloggerCardState;
+      const b = id ? db.bloggerDirectory.find((x) => x.id === id) : null;
+      const root = document.getElementById('drawer-root');
+      if (!root) return;
+      if (!b) { root.innerHTML = ''; return; }
+      const tabContent = tab === 'history' ? bloggerHistoryTabHtml(b)
+        : tab === 'ai' ? bloggerAiTabHtml(b)
+        : bloggerFormFieldsHtml(b) + `<button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitBloggerCard('${b.id}')">Save changes</button>`;
+      root.innerHTML = `
+        <div class="drawer-backdrop" onclick="if(event.target===this) closeBloggerCard()">
+          <div class="drawer">
+            <button class="modal-close" onclick="closeBloggerCard()">×</button>
+            <h2 style="margin:0 0 4px;">${escapeHtml(b.profileName)}</h2>
+            <div class="small muted" style="margin-bottom:14px;">
+              ${b.instagramUrl ? `<a href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener">Instagram</a>` : ''}
+              ${b.instagramUrl && b.tiktokUrl ? ' · ' : ''}
+              ${b.tiktokUrl ? `<a href="${escapeHtml(b.tiktokUrl)}" target="_blank" rel="noopener">TikTok</a>` : ''}
+            </div>
+            <div class="tabs">
+              <button class="${tab === 'profile' ? 'active' : ''}" onclick="switchBloggerCardTab('profile')">Profile</button>
+              <button class="${tab === 'history' ? 'active' : ''}" onclick="switchBloggerCardTab('history')">History</button>
+              <button class="${tab === 'ai' ? 'active' : ''}" onclick="switchBloggerCardTab('ai')">AI recommendations</button>
+            </div>
+            <div id="card-tab-content">${tabContent}</div>
+            <hr class="divider" style="margin:20px 0 10px;" />
+            <button class="btn btn-ghost btn-sm" onclick="deleteBlogger('${b.id}')">Delete blogger</button>
+          </div>
+        </div>`;
+      if (tab === 'profile') setupBloggerFormDynamicRows(b);
+    }
+
+    async function submitBloggerCard(id) {
+      try {
+        const fields = readBloggerForm();
+        if (!fields.profileName) fields.profileName = 'Untitled blogger';
+        await reload();
+        const updated = await dbUpdate('bloggerDirectory', id, fields);
+        const idx = db.bloggerDirectory.findIndex((x) => x.id === id);
+        if (idx >= 0) db.bloggerDirectory[idx] = updated;
+        toast('Blogger updated.');
+      } catch (err) {
+        console.error('submitBloggerCard failed:', err);
+        toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
+        return;
+      }
+      render();
+      renderBloggerCard();
     }
 
     async function markStatsChecked(id) {
@@ -555,16 +676,16 @@
           const om = origin ? originMeta(origin) : null;
           const gm = b.gender ? GENDER_META[b.gender] : null;
           return `
-          <tr>
+          <tr onclick="openBloggerCard('${b.id}')" style="cursor:pointer;">
             <td>
               <div style="display:flex;align-items:center;gap:10px;">
                 <div class="avatar" style="width:30px;height:30px;font-size:12.5px;flex-shrink:0;${om ? `background:${om.color};` : ''}">${escapeHtml(initial)}</div>
                 <div>
                   <strong>${escapeHtml(b.profileName)}</strong>
                   <div class="small muted">
-                    ${b.instagramUrl ? `<a href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener">Instagram</a>` : ''}
+                    ${b.instagramUrl ? `<a href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Instagram</a>` : ''}
                     ${b.instagramUrl && b.tiktokUrl ? ' · ' : ''}
-                    ${b.tiktokUrl ? `<a href="${escapeHtml(b.tiktokUrl)}" target="_blank" rel="noopener">TikTok</a>` : ''}
+                    ${b.tiktokUrl ? `<a href="${escapeHtml(b.tiktokUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">TikTok</a>` : ''}
                   </div>
                 </div>
               </div>
@@ -586,14 +707,10 @@
             <td><span class="badge ${bloggerStatusBadgeClass(b.status)}">${escapeHtml(STATUS_LABELS_LOCAL[b.status] || b.status)}</span></td>
             <td>
               <span class="badge ${fresh.cls}">${fresh.label}</span><br/>
-              <button class="btn btn-ghost btn-sm" style="margin-top:4px;" onclick="markStatsChecked('${b.id}')">Mark checked</button>
+              <button class="btn btn-ghost btn-sm" style="margin-top:4px;" onclick="event.stopPropagation(); markStatsChecked('${b.id}')">Mark checked</button>
             </td>
             <td class="small" style="max-width:180px;" title="${escapeHtml(b.termsNotes || '')}">${escapeHtml(truncate(b.termsNotes, 40))}</td>
-            <td style="white-space:nowrap;">
-              <button class="btn btn-ghost btn-sm" onclick='openBloggerModal(${JSON.stringify(b.id)})'>Edit</button>
-              <button class="btn btn-ghost btn-sm" onclick="openHistoryModal('${b.id}')">History</button>
-              <button class="btn btn-ghost btn-sm" onclick="deleteBlogger('${b.id}')">Delete</button>
-            </td>
+            <td class="small muted" style="text-align:right;">›</td>
           </tr>
         `;
         }).join('')}
@@ -601,18 +718,14 @@
       </table></div>`;
     }
 
-    /* ---------------- Add / Edit modal ---------------- */
-    function openBloggerModal(id) {
-      const b = id ? db.bloggerDirectory.find((x) => x.id === id) : null;
+    /* ---------------- Add / Edit modal (create-only now — editing an existing
+       blogger happens inside the tabbed card, see openBloggerCard below) ---------------- */
+    function bloggerFormFieldsHtml(b) {
       const storedOrigin = b ? (b.audienceCountries || [])[0] || null : null;
       const isCustomOrigin = storedOrigin && !KNOWN_ORIGIN_CODES.includes(storedOrigin);
       const cityOptions = buildOptionList(CITY_SUGGESTIONS, db.bloggerDirectory, 'city', 'No city set');
       const cityIsCustom = b && b.city && !cityOptions.some((c) => c.toLowerCase() === b.city.trim().toLowerCase());
-      document.getElementById('modal-root').innerHTML = `
-        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
-          <div class="modal">
-            <button class="modal-close" onclick="closeModal()">×</button>
-            <h2>${b ? 'Edit blogger' : 'Add blogger'}</h2>
+      return `
             <label>Profile name</label>
             <input id="b-name" value="${b ? escapeHtml(b.profileName) : ''}" placeholder="Can be filled in later" />
             <div class="grid grid-2">
@@ -623,6 +736,8 @@
             <input id="b-email" type="email" value="${b ? escapeHtml(b.email || '') : ''}" />
             <label>Niche / category tags <span class="field-hint" style="display:inline;">(comma-separated, e.g. "food, lifestyle" — used for strategic matching)</span></label>
             <input id="b-category" value="${b ? escapeHtml((b.category || []).join(', ')) : ''}" placeholder="e.g. food, travel, beauty" />
+            <label>Past brand collaborations <span class="field-hint" style="display:inline;">(comma-separated — brands this creator has worked with, including before/outside IC; our own projects show up automatically in the History tab)</span></label>
+            <input id="b-past-brands" value="${b ? escapeHtml((b.pastBrands || []).join(', ')) : ''}" placeholder="e.g. Nike, Zara, Redbull" />
             <div class="grid grid-3">
               <div><label>Followers</label><input id="b-followers" type="number" value="${b && b.followersCount != null ? b.followersCount : ''}" /></div>
               <div><label>ER (%)</label><input id="b-er" type="number" step="0.01" value="${b && b.engagementRate != null ? b.engagementRate : ''}" /></div>
@@ -694,13 +809,32 @@
             </div>
             <label>Terms / notes</label>
             <textarea id="b-terms" placeholder="Rate if paid, barter conditions, anything to remember for next time…">${b ? escapeHtml(b.termsNotes || '') : ''}</textarea>
-            <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitBlogger(${b ? `'${b.id}'` : 'null'})">${b ? 'Save changes' : 'Add blogger'}</button>
-          </div>
-        </div>`;
+      `;
+    }
+
+    /* Populates the dynamic audience-data rows after bloggerFormFieldsHtml(b)
+       has been injected into the DOM — must run post-render since it reads
+       the just-created #b-aud-age-rows / #b-aud-city-rows containers. */
+    function setupBloggerFormDynamicRows(b) {
       const savedAgeRanges = (b && b.audienceStats && Array.isArray(b.audienceStats.ageRanges) && b.audienceStats.ageRanges.length) ? b.audienceStats.ageRanges : [{}];
       savedAgeRanges.forEach((r) => addAudienceAgeRow(r.range || '', r.percent != null ? r.percent : ''));
       const savedTopCities = (b && b.audienceStats && Array.isArray(b.audienceStats.topCities) && b.audienceStats.topCities.length) ? b.audienceStats.topCities : [{}];
       savedTopCities.forEach((r) => addAudienceCityRow(r.city || '', r.percent != null ? r.percent : ''));
+    }
+
+    function openBloggerModal() {
+      /* Create-only now — editing an existing blogger happens inside the
+         tabbed card (openBloggerCard), which shares these same form fields. */
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">×</button>
+            <h2>Add blogger</h2>
+            ${bloggerFormFieldsHtml(null)}
+            <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="submitBlogger(null)">Add blogger</button>
+          </div>
+        </div>`;
+      setupBloggerFormDynamicRows(null);
     }
 
     /* Dynamic add/remove rows for the "Audience data" block — kept as plain
@@ -817,6 +951,7 @@
         tiktokUrl: document.getElementById('b-tiktok').value.trim(),
         email: document.getElementById('b-email').value.trim(),
         category: document.getElementById('b-category').value.split(',').map((s) => s.trim()).filter(Boolean),
+        pastBrands: document.getElementById('b-past-brands').value.split(',').map((s) => s.trim()).filter(Boolean),
         followersCount: document.getElementById('b-followers').value ? Number(document.getElementById('b-followers').value) : null,
         engagementRate: document.getElementById('b-er').value ? Number(document.getElementById('b-er').value) : null,
         avgReach90d: document.getElementById('b-reach').value ? Number(document.getElementById('b-reach').value) : null,
@@ -871,6 +1006,7 @@
       await dbDelete('bloggerDirectory', id);
       db.bloggerDirectory = db.bloggerDirectory.filter((x) => x.id !== id);
       toast('Blogger removed.');
+      closeBloggerCard();
       render();
     }
 

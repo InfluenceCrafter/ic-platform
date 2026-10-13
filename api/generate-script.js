@@ -13,7 +13,7 @@ const SYSTEM_PROMPT = `You are a senior influencer-marketing strategist working 
 
 Given a creator's profile and their historical content performance, your job is to produce a short, practical content recommendation: the specific content angle, format and hook that is most likely to perform well for THIS creator on their next collaboration.
 
-Base your reasoning on patterns in the provided performance history (what formats/topics got the best engagement rate, views, likes, comments) and on the creator's niche, city and audience country. If a project brief is provided, tailor the recommendation to fit that brand/campaign while staying true to what has historically worked for this creator.
+Base your reasoning on patterns in the provided performance history (what formats/topics got the best engagement rate, views, likes, comments) and on the creator's niche, city and audience country. Also take into account their past brand collaborations if listed — reuse formats/angles that clearly worked for similar brands, and flag (briefly) if the new brief looks like it could conflict with a past collaboration (e.g. a direct competitor). If a project brief is provided, tailor the recommendation to fit that brand/campaign while staying true to what has historically worked for this creator.
 
 Write in a concise, actionable style a marketing manager can paste straight into a brief for the creator. Structure your answer as:
 1. Recommended content angle (1-2 sentences)
@@ -33,6 +33,7 @@ function buildUserPrompt({ blogger, history, brief }) {
   if (b.audienceCountry) lines.push(`Main audience country: ${b.audienceCountry}`);
   if (b.followers) lines.push(`Followers: ${b.followers}`);
   if (b.er) lines.push(`Average engagement rate: ${b.er}%`);
+  if (b.pastBrands && b.pastBrands.length) lines.push(`Past brand collaborations: ${b.pastBrands.join(', ')}`);
 
   lines.push('');
   if (Array.isArray(history) && history.length) {
