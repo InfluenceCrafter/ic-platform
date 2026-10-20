@@ -251,12 +251,6 @@ tbody tr:hover { background: var(--paper); }
 .roster-date-row { display: flex; gap: 7px; margin-bottom: 7px; }
 .roster-date-row input { flex: 1; margin: 0; }
 
-/* Compact numeric stats grid, entered right inside the Content/Stats panel
-   instead of only on the blogger's own card in Blogger Database. */
-.roster-stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 9px; margin-top: 2px; }
-.roster-stats-grid div { display: flex; flex-direction: column; }
-.roster-stats-grid label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-faint); margin-bottom: 3px; }
-.roster-stats-grid input { margin: 0; padding: 6px 9px; font-size: 13px; background: #fff; }
 .roster-stats-divider { border: none; border-top: 1px solid var(--line); margin: 10px 0; }
 
 .toggle-pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 13px; font-size: 12.5px; font-weight: 600; cursor: pointer; background: #fff; color: var(--ink-soft); user-select: none; transition: all 0.15s ease; margin: 0 6px 6px 0; }
@@ -265,11 +259,24 @@ tbody tr:hover { background: var(--paper); }
 .toggle-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); flex-shrink: 0; }
 .toggle-pill.on .dot { background: var(--green); }
 
-.content-link-row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
-.content-link-row:last-child { margin-bottom: 0; }
-.content-link-row .format-tag { font-size: 11px; font-weight: 800; color: var(--ink-soft); background: var(--grey-bg); border-radius: 6px; padding: 4px 7px; width: 50px; flex-shrink: 0; text-align: center; }
-.content-link-row input { flex: 1; margin: 0; }
+.format-tag { font-size: 11px; font-weight: 800; color: var(--ink-soft); background: var(--grey-bg); border-radius: 6px; padding: 4px 7px; width: 50px; flex-shrink: 0; text-align: center; }
 .roster-no-links { font-size: 12.5px; color: var(--ink-faint); padding: 4px 0; }
+
+/* One row per content unit (Reel / TikTok / Stories…) — link on top,
+   its own Reach/Engagement/ER/CTR right underneath, so stats are entered
+   per piece of content instead of one blended number per blogger. Reach
+   & Engagement accept a typed-in running sum (e.g. "=302+105"); ER is
+   computed automatically and shown read-only; CTR stays manual. */
+.content-unit-row { background: #fff; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 10px 11px; margin-bottom: 8px; }
+.content-unit-row:last-child { margin-bottom: 0; }
+.content-unit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.content-unit-head input { flex: 1; margin: 0; }
+.content-unit-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px 8px; }
+.content-unit-stats div { display: flex; flex-direction: column; }
+.content-unit-stats label { font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-faint); margin-bottom: 3px; }
+.content-unit-stats input { margin: 0; padding: 6px 8px; font-size: 12.5px; background: var(--grey-bg); }
+.computed-value { padding: 6px 8px; font-size: 12.5px; font-weight: 700; color: var(--ink); background: transparent; }
+@media (max-width: 560px) { .content-unit-stats { grid-template-columns: 1fr 1fr; } }
 
 .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--ink); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0; }
 

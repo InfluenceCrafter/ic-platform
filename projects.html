@@ -490,7 +490,7 @@
         return `
           <div class="card">
             <h3 style="margin-top:0;">Reporting</h3>
-            <p class="muted small">No performance stats tagged to this project yet. Log stats on each blogger's card in Blogger Database (Performance history tab) and pick this project in the "Project" field — the numbers will roll up here automatically, ready to share with the brand.</p>
+            <p class="muted small">No performance stats logged for this project yet. Enter Reach/Engagement/CTR per content unit right on each blogger's roster card (Roster &amp; Content tab) — the numbers will roll up here automatically, ready to share with the brand.</p>
           </div>
         `;
       }
@@ -499,15 +499,21 @@
         (acc, h) => {
           acc.views += Number(h.views) || 0;
           acc.reach += Number(h.reach) || 0;
+          acc.engagement += Number(h.engagement) || 0;
           acc.likes += Number(h.likes) || 0;
           acc.comments += Number(h.comments) || 0;
           acc.shares += Number(h.shares) || 0;
           return acc;
         },
-        { views: 0, reach: 0, likes: 0, comments: 0, shares: 0 }
+        { views: 0, reach: 0, engagement: 0, likes: 0, comments: 0, shares: 0 }
       );
+      /* ER/CTR are never summed — each content unit's ER/CTR is already a
+         rate, so the campaign-level number is the average across every
+         unit logged (reach stays a straight sum since it's a count). */
       const ers = history.map((h) => Number(h.er)).filter((n) => !isNaN(n) && n != null);
       const avgEr = ers.length ? (ers.reduce((a, b) => a + b, 0) / ers.length).toFixed(2) : null;
+      const ctrs = history.map((h) => Number(h.ctr)).filter((n) => !isNaN(n) && n != null);
+      const avgCtr = ctrs.length ? (ctrs.reduce((a, b) => a + b, 0) / ctrs.length).toFixed(2) : null;
 
       const byBlogger = roster
         .map((pb) => {
@@ -515,12 +521,11 @@
           const entries = history.filter((h) => h.bloggerId === pb.bloggerId);
           const bTotals = entries.reduce(
             (acc, h) => {
-              acc.views += Number(h.views) || 0;
-              acc.likes += Number(h.likes) || 0;
-              acc.comments += Number(h.comments) || 0;
+              acc.reach += Number(h.reach) || 0;
+              acc.engagement += Number(h.engagement) || 0;
               return acc;
             },
-            { views: 0, likes: 0, comments: 0 }
+            { reach: 0, engagement: 0 }
           );
           return { name: b ? b.profileName || 'Untitled blogger' : 'Blogger removed from database', entries: entries.length, ...bTotals };
         });
@@ -530,13 +535,11 @@
         <div class="card">
           <h3 style="margin-top:0;">Campaign totals</h3>
           <div class="grid grid-3">
-            <div><div class="small muted" style="font-weight:700;">Views</div><div style="font-size:20px;font-weight:700;">${totals.views.toLocaleString()}</div></div>
             <div><div class="small muted" style="font-weight:700;">Reach</div><div style="font-size:20px;font-weight:700;">${totals.reach.toLocaleString()}</div></div>
-            <div><div class="small muted" style="font-weight:700;">Likes</div><div style="font-size:20px;font-weight:700;">${totals.likes.toLocaleString()}</div></div>
-            <div><div class="small muted" style="font-weight:700;">Comments</div><div style="font-size:20px;font-weight:700;">${totals.comments.toLocaleString()}</div></div>
-            <div><div class="small muted" style="font-weight:700;">Shares</div><div style="font-size:20px;font-weight:700;">${totals.shares.toLocaleString()}</div></div>
+            <div><div class="small muted" style="font-weight:700;">Engagement</div><div style="font-size:20px;font-weight:700;">${totals.engagement.toLocaleString()}</div></div>
             <div><div class="small muted" style="font-weight:700;">Avg ER</div><div style="font-size:20px;font-weight:700;">${avgEr != null ? avgEr + '%' : '—'}</div></div>
-            <div><div class="small muted" style="font-weight:700;">Posts logged</div><div style="font-size:20px;font-weight:700;">${history.length}</div></div>
+            <div><div class="small muted" style="font-weight:700;">Avg CTR</div><div style="font-size:20px;font-weight:700;">${avgCtr != null ? avgCtr + '%' : '—'}</div></div>
+            <div><div class="small muted" style="font-weight:700;">Content units logged</div><div style="font-size:20px;font-weight:700;">${history.length}</div></div>
           </div>
         </div>
         <div class="card">
@@ -546,7 +549,7 @@
               (r) => `
             <div class="card-row" style="padding:7px 0;border-bottom:1px solid var(--line-soft);">
               <div style="font-weight:600;">${escapeHtml(r.name)}</div>
-              <div class="small muted">${r.entries} post${r.entries === 1 ? '' : 's'} · ${r.views.toLocaleString()} views · ${r.likes.toLocaleString()} likes · ${r.comments.toLocaleString()} comments</div>
+              <div class="small muted">${r.entries} content unit${r.entries === 1 ? '' : 's'} · ${r.reach.toLocaleString()} reach · ${r.engagement.toLocaleString()} engagement</div>
             </div>`
             ).join('') || '<p class="muted small">No stats yet.</p>'
           }
@@ -849,15 +852,42 @@
       `;
     }
 
-    /* The performance-history entry (views/reach/likes/comments/er/ctr)
-       that belongs to THIS roster row — one blogger can have many history
-       entries across different projects/waves (see Blogger Database's own
-       Performance history tab), so this looks up the one scoped to this
-       exact project + wave combo, not just the blogger. */
-    function historyEntryForRoster(pb) {
+    /* The performance-history entry for ONE content unit (one row per
+       selected format — reel/tiktok/post/stories) belonging to THIS roster
+       row — one blogger can have many history entries across different
+       projects/waves/formats (see Blogger Database's own Performance
+       history tab), so this looks up the one scoped to this exact
+       project + wave + format combo, not just the blogger. */
+    function historyEntryForRoster(pb, format) {
       return (db.bloggerPerformanceHistory || []).find(
-        (h) => h.bloggerId === pb.bloggerId && h.projectId === pb.projectId && (h.waveId || null) === (pb.waveId || null)
+        (h) =>
+          h.bloggerId === pb.bloggerId &&
+          h.projectId === pb.projectId &&
+          (h.waveId || null) === (pb.waveId || null) &&
+          (h.format || null) === (format || null)
       );
+    }
+
+    /* Lets Reach/Engagement fields accept a running sum typed in-line —
+       e.g. "=302+105" when a blogger posts several stories — instead of
+       forcing the admin to add them up by hand first. Accepts a bare
+       number too. Only +,-,*,/,(,) and digits are ever evaluated (no
+       free-form eval of arbitrary input), so this stays safe even though
+       it's a plain Function() call. */
+    function evalMathExpr(str) {
+      if (str == null || String(str).trim() === '') return null;
+      let expr = String(str).trim();
+      if (expr.startsWith('=')) expr = expr.slice(1);
+      if (!/^[0-9+\-*/.()\s]+$/.test(expr)) {
+        const n = Number(expr);
+        return isNaN(n) ? null : n;
+      }
+      try {
+        const result = Function('"use strict"; return (' + expr + ')')();
+        return typeof result === 'number' && isFinite(result) ? result : null;
+      } catch (e) {
+        return null;
+      }
     }
 
     /* Deterministic color per blogger (same name → same color every render)
@@ -875,11 +905,37 @@
       const name = b ? (b.profileName || 'Untitled blogger') : 'Blogger removed from database';
       const formats = pb.contentFormat || [];
       const links = pb.contentLinks || {};
-      const linkFormats = formats.filter((f) => f !== 'stories');
-      const hasAnyLinkField = linkFormats.length > 0 || formats.includes('stories');
       const wave = pb.waveId ? (db.projectWaves || []).find((w) => w.id === pb.waveId) : null;
       const initial = name.trim().charAt(0).toUpperCase() || '?';
-      const entry = historyEntryForRoster(pb) || {};
+      /* One row per selected content unit (reel/tiktok/post/stories) —
+         each gets its own link + Reach/Engagement (both accept a typed-in
+         running sum, e.g. "=302+105") + an ER that's computed automatically
+         the moment reach & engagement are both known + a manually-entered
+         CTR (can't be derived, so stays an input). */
+      const contentUnitRows = formats
+        .map((f) => {
+          const isStories = f === 'stories';
+          const linkVal = isStories ? pb.storiesLink || '' : links[f] || '';
+          const linkOnchange = isStories
+            ? `updateRoster('${pb.id}','storiesLink',this.value)`
+            : `updateContentLink('${pb.id}','${f}',this.value)`;
+          const entry = historyEntryForRoster(pb, f) || {};
+          const erDisplay = entry.er != null && entry.er !== '' ? Number(entry.er).toFixed(2) + '%' : '—';
+          return `
+            <div class="content-unit-row">
+              <div class="content-unit-head">
+                <span class="format-tag">${CONTENT_FORMAT_OPTIONS[f]}</span>
+                <input placeholder="${isStories ? 'Google Drive link' : CONTENT_FORMAT_OPTIONS[f] + ' link'}" value="${escapeHtml(linkVal)}" onchange="${linkOnchange}" />
+              </div>
+              <div class="content-unit-stats">
+                <div><label>Reach</label><input value="${entry.reach ?? ''}" placeholder="${isStories ? '=302+105' : 'number'}" onchange="updateRosterStat('${pb.id}','reach',this.value,'${f}')" /></div>
+                <div><label>Engagement</label><input value="${entry.engagement ?? ''}" placeholder="likes+comments" onchange="updateRosterStat('${pb.id}','engagement',this.value,'${f}')" /></div>
+                <div><label>ER</label><div class="computed-value">${erDisplay}</div></div>
+                <div><label>CTR %</label><input type="number" step="0.01" min="0" value="${entry.ctr ?? ''}" onchange="updateRosterStat('${pb.id}','ctr',this.value,'${f}')" /></div>
+              </div>
+            </div>`;
+        })
+        .join('');
       return `
         <div class="roster-card track-${pb.visitTrackStatus}">
           <div class="roster-card-top">
@@ -918,38 +974,13 @@
                   .map(([k, label]) => `<div class="chip chip-sm ${formats.includes(k) ? 'selected' : ''}" onclick="toggleContentFormat('${pb.id}','${k}')">${label}</div>`)
                   .join('')}
               </div>
-              ${!hasAnyLinkField
-                ? `<div class="roster-no-links">Select a format above to add its link</div>`
-                : `${linkFormats
-                    .map(
-                      (f) => `
-                <div class="content-link-row">
-                  <span class="format-tag">${CONTENT_FORMAT_OPTIONS[f]}</span>
-                  <input placeholder="${CONTENT_FORMAT_OPTIONS[f]} link" value="${escapeHtml(links[f] || '')}" onchange="updateContentLink('${pb.id}','${f}',this.value)" />
-                </div>`
-                    )
-                    .join('')}${
-                    formats.includes('stories')
-                      ? `
-                <div class="content-link-row">
-                  <span class="format-tag">Stories</span>
-                  <input placeholder="Google Drive link" value="${escapeHtml(pb.storiesLink || '')}" onchange="updateRoster('${pb.id}','storiesLink',this.value)" />
-                </div>`
-                      : ''
-                  }`}
+              ${formats.length === 0
+                ? `<div class="roster-no-links">Select a format above to add its content & stats</div>`
+                : contentUnitRows}
               <hr class="roster-stats-divider" />
-              <div class="roster-field-label" style="margin-bottom:7px;">Stats</div>
-              <div style="margin-bottom:9px;">
+              <div style="margin-bottom:0;">
                 <div class="toggle-pill ${pb.statsRequested ? 'on' : ''}" onclick="toggleBoolField('${pb.id}','statsRequested')"><span class="dot"></span>Requested</div>
                 <div class="toggle-pill ${pb.statsSubmitted ? 'on' : ''}" onclick="toggleBoolField('${pb.id}','statsSubmitted')"><span class="dot"></span>Submitted</div>
-              </div>
-              <div class="roster-stats-grid">
-                <div><label>Views</label><input type="number" min="0" value="${entry.views ?? ''}" onchange="updateRosterStat('${pb.id}','views',this.value)" /></div>
-                <div><label>Reach</label><input type="number" min="0" value="${entry.reach ?? ''}" onchange="updateRosterStat('${pb.id}','reach',this.value)" /></div>
-                <div><label>Likes</label><input type="number" min="0" value="${entry.likes ?? ''}" onchange="updateRosterStat('${pb.id}','likes',this.value)" /></div>
-                <div><label>Comments</label><input type="number" min="0" value="${entry.comments ?? ''}" onchange="updateRosterStat('${pb.id}','comments',this.value)" /></div>
-                <div><label>ER %</label><input type="number" step="0.01" min="0" value="${entry.er ?? ''}" onchange="updateRosterStat('${pb.id}','er',this.value)" /></div>
-                <div><label>CTR %</label><input type="number" step="0.01" min="0" value="${entry.ctr ?? ''}" onchange="updateRosterStat('${pb.id}','ctr',this.value)" /></div>
               </div>
             </div>
           </div>
@@ -976,31 +1007,46 @@
     }
 
     /* Upserts into blogger_performance_history, scoped to this exact
-       roster row's blogger + project + wave — lets the admin log stats
-       right next to the content links instead of hopping over to the
-       blogger's own card in Blogger Database. If no entry exists yet for
-       this project/wave combo, the first field edited creates one; later
+       roster row's blogger + project + wave + CONTENT UNIT (format) — lets
+       the admin log stats for each piece of content (one Reel, one TikTok,
+       one Stories batch…) right next to that unit's link, instead of one
+       blended number per blogger or hopping over to Blogger Database.
+       Reach/Engagement accept a typed-in running sum via evalMathExpr
+       (e.g. "=302+105" for several stories); ER is then recomputed
+       automatically from whichever of reach/engagement is now known — it's
+       never typed in directly. CTR stays a manual field (can't be derived
+       from reach/engagement). If no entry exists yet for this exact
+       project/wave/format combo, the first field edited creates one; later
        edits just update it. (A blogger can still have other, separate
-       history entries from other projects/waves — those are untouched.) */
-    async function updateRosterStat(pbId, field, value) {
+       history entries from other projects/waves/formats — those are
+       untouched.) */
+    async function updateRosterStat(pbId, field, value, format) {
       try {
         const pb = db.projectBloggers.find((x) => x.id === pbId);
         if (!pb) return;
-        const numValue = value === '' ? null : Number(value);
-        let entry = historyEntryForRoster(pb);
+        const numValue = field === 'reach' || field === 'engagement' ? evalMathExpr(value) : value === '' ? null : Number(value);
+        let entry = historyEntryForRoster(pb, format);
+        const patch = { [field]: numValue };
+        if (field === 'reach' || field === 'engagement') {
+          const reach = field === 'reach' ? numValue : entry ? entry.reach : null;
+          const engagement = field === 'engagement' ? numValue : entry ? entry.engagement : null;
+          patch.er = reach && engagement ? Number(((engagement / reach) * 100).toFixed(2)) : null;
+        }
         if (entry) {
-          entry[field] = numValue;
-          await dbUpdate('bloggerPerformanceHistory', entry.id, { [field]: numValue });
+          Object.assign(entry, patch);
+          await dbUpdate('bloggerPerformanceHistory', entry.id, patch);
         } else {
           const base = {
             bloggerId: pb.bloggerId,
             projectId: pb.projectId,
             waveId: pb.waveId || null,
+            format: format || null,
             contentUrl: '',
             platform: '',
             postedAt: null,
             views: null,
             reach: null,
+            engagement: null,
             likes: null,
             comments: null,
             shares: null,
@@ -1010,7 +1056,7 @@
             notes: '',
             createdAt: nowISO(),
           };
-          base[field] = numValue;
+          Object.assign(base, patch);
           const row = await dbInsert('bloggerPerformanceHistory', base);
           db.bloggerPerformanceHistory = db.bloggerPerformanceHistory || [];
           db.bloggerPerformanceHistory.push(row);
