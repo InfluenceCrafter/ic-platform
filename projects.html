@@ -33,6 +33,17 @@
     let projectDetailTab = 'overview'; // 'overview' | 'roster' | 'tasks' | 'reporting'
     let rosterGroupFilter = ''; // filters the inline roster tab's table by group_label
 
+    /* Which campaign wave is currently in focus, for projects that opted into
+       waves (p.hasWaves — see openProjectModal's toggle). null = not decided
+       yet for this project (Roster/Reporting tabs default it to the latest
+       wave on first render); 'all' = explicit "All waves" cumulative view;
+       otherwise a project_waves.id. Reset whenever a different project is
+       opened (see openProject below) so stale selections don't leak across
+       projects. Shared between the Roster and Reporting tabs on purpose —
+       switching tabs keeps looking at the same wave. */
+    let activeWaveId = null;
+    let addBloggerWaveId = null; // which wave "+ Add blogger" is currently adding into (null for non-wave projects)
+
     /* State for the "Add blogger to project" modal's filters — reset each
        time the modal opens (see openAddBloggerModal). */
     let addBloggerCityFilter = '';
@@ -108,6 +119,25 @@
     function projectRoster(projectId) {
       return db.projectBloggers.filter((pb) => pb.projectId === projectId);
     }
+
+    /* All waves of a project, oldest first (by start date, falling back to
+       creation order) — used to order the wave selector chips and to find
+       "the previous wave" for the Reporting tab's % delta column. */
+    function projectWaves(projectId) {
+      return (db.projectWaves || [])
+        .filter((w) => w.projectId === projectId)
+        .sort((a, b) => new Date(a.startDate || a.createdAt || 0) - new Date(b.startDate || b.createdAt || 0));
+    }
+
+    /* The roster rows actually relevant to what's on screen right now: the
+       full project roster for non-wave projects, otherwise narrowed down to
+       whichever wave is selected (or every row, if "All waves" is picked). */
+    function visibleRoster(p) {
+      const roster = projectRoster(p.id);
+      if (!p.hasWaves || activeWaveId === 'all' || !activeWaveId) return roster;
+      return roster.filter((pb) => pb.waveId === activeWaveId);
+    }
+
     function projectChecklist(projectId) {
       return db.projectChecklist.filter((c) => c.projectId === projectId).sort((a, b) => a.stepOrder - b.stepOrder);
     }
@@ -121,11 +151,12 @@
         .filter(Boolean);
     }
 
-    /* Distinct group_label values already used within one project, for the
+    /* Distinct group_label values already used within the given roster rows
+       (scoped to the current wave, if any — see visibleRoster), for the
        roster's filter chips + the group input's datalist. */
-    function projectGroupValues(projectId) {
+    function projectGroupValues(roster) {
       const set = new Set();
-      projectRoster(projectId).forEach((pb) => { if (pb.groupLabel) set.add(pb.groupLabel); });
+      roster.forEach((pb) => { if (pb.groupLabel) set.add(pb.groupLabel); });
       return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
     }
 
@@ -238,7 +269,11 @@
     }
 
     function setProjectStatusFilter(status) { projectStatusFilter = status; render(); }
-    function openProject(id) { activeProjectId = id; view = 'detail'; projectDetailTab = 'overview'; rosterGroupFilter = ''; render(); }
+    function openProject(id) { activeProjectId = id; view = 'detail'; projectDetailTab = 'overview'; rosterGroupFilter = ''; activeWaveId = null; render(); }
+
+    /* Switches which wave the Roster/Reporting tabs are looking at. 'all'
+       is the explicit cumulative view; anything else is a project_waves.id. */
+    function setActiveWave(waveId) { activeWaveId = waveId; refreshProjectDetailTab(); }
     function backToProjects() { view = 'list'; activeProjectId = null; render(); }
 
     /* ---------------- Detail view ---------------- */
@@ -413,8 +448,40 @@
        (project_id — see supabase/patch-2026-10-13.sql) into campaign-level
        totals a brand can actually be handed, plus a per-blogger breakdown
        and a "missing stats" nudge list for roster members with zero
-       entries logged against this campaign yet. */
+       entries logged against this campaign yet.
+
+       For wave projects (p.hasWaves), this gets a wave selector on top:
+       picking a specific wave swaps in a KPI comparison table modelled
+       directly on the real Bowlers brand report (Metrics | previous wave |
+       current wave | % delta) instead of this flat cumulative view; "All
+       waves" keeps the original cumulative view, run across every wave's
+       history at once. */
     function projectReportingTab(p) {
+      if (!p.hasWaves) return projectReportingCumulative(p);
+
+      const waves = projectWaves(p.id);
+      if (activeWaveId === null) activeWaveId = waves.length ? waves[waves.length - 1].id : 'all';
+
+      const selectorHtml = `
+        <div class="card" style="margin-bottom:14px;">
+          <div class="chip-select" style="margin:0;flex-wrap:wrap;">
+            <div class="chip ${activeWaveId === 'all' ? 'selected' : ''}" onclick="setActiveWave('all')">All waves (cumulative)</div>
+            ${waves.map((w) => `<div class="chip ${activeWaveId === w.id ? 'selected' : ''}" onclick="setActiveWave('${w.id}')">${escapeHtml(w.label)}</div>`).join('')}
+          </div>
+        </div>
+      `;
+
+      if (activeWaveId === 'all' || !waves.length) {
+        return selectorHtml + projectReportingCumulative(p);
+      }
+
+      const wave = waves.find((w) => w.id === activeWaveId) || waves[waves.length - 1];
+      const idx = waves.findIndex((w) => w.id === wave.id);
+      const prevWave = idx > 0 ? waves[idx - 1] : null;
+      return selectorHtml + waveReportCard(p, wave, prevWave);
+    }
+
+    function projectReportingCumulative(p) {
       const roster = projectRoster(p.id);
       const history = (db.bloggerPerformanceHistory || []).filter((h) => h.projectId === p.id);
 
@@ -430,12 +497,13 @@
       const totals = history.reduce(
         (acc, h) => {
           acc.views += Number(h.views) || 0;
+          acc.reach += Number(h.reach) || 0;
           acc.likes += Number(h.likes) || 0;
           acc.comments += Number(h.comments) || 0;
           acc.shares += Number(h.shares) || 0;
           return acc;
         },
-        { views: 0, likes: 0, comments: 0, shares: 0 }
+        { views: 0, reach: 0, likes: 0, comments: 0, shares: 0 }
       );
       const ers = history.map((h) => Number(h.er)).filter((n) => !isNaN(n) && n != null);
       const avgEr = ers.length ? (ers.reduce((a, b) => a + b, 0) / ers.length).toFixed(2) : null;
@@ -462,6 +530,7 @@
           <h3 style="margin-top:0;">Campaign totals</h3>
           <div class="grid grid-3">
             <div><div class="small muted" style="font-weight:700;">Views</div><div style="font-size:20px;font-weight:700;">${totals.views.toLocaleString()}</div></div>
+            <div><div class="small muted" style="font-weight:700;">Reach</div><div style="font-size:20px;font-weight:700;">${totals.reach.toLocaleString()}</div></div>
             <div><div class="small muted" style="font-weight:700;">Likes</div><div style="font-size:20px;font-weight:700;">${totals.likes.toLocaleString()}</div></div>
             <div><div class="small muted" style="font-weight:700;">Comments</div><div style="font-size:20px;font-weight:700;">${totals.comments.toLocaleString()}</div></div>
             <div><div class="small muted" style="font-weight:700;">Shares</div><div style="font-size:20px;font-weight:700;">${totals.shares.toLocaleString()}</div></div>
@@ -491,6 +560,117 @@
         </div>`
             : ''
         }
+      `;
+    }
+
+    /* ---------------- Wave-level KPI comparison report ---------------- */
+    /* One wave's numbers, built for a direct side-by-side against the
+       chronologically previous wave — same shape as page 3 of the real
+       Bowlers PDF report (Number of Influencers / Content by pcs / Total
+       reach / Average ER / Average CTR / Brand mentions / Google reviews,
+       each with a % delta vs. the previous wave). */
+    function waveMetrics(p, wave) {
+      const rosterRows = db.projectBloggers.filter((pb) => pb.projectId === p.id && pb.waveId === wave.id);
+      const history = (db.bloggerPerformanceHistory || []).filter((h) => h.waveId === wave.id);
+
+      const formatCounts = {};
+      let totalContentPcs = 0;
+      rosterRows.forEach((pb) => (pb.contentFormat || []).forEach((f) => { formatCounts[f] = (formatCounts[f] || 0) + 1; totalContentPcs++; }));
+
+      const reachVals = history.map((h) => Number(h.reach)).filter((n) => !isNaN(n) && n != null);
+      const totalReach = reachVals.reduce((a, b) => a + b, 0);
+
+      const erVals = history.map((h) => Number(h.er)).filter((n) => !isNaN(n) && n != null);
+      const avgEr = erVals.length ? erVals.reduce((a, b) => a + b, 0) / erVals.length : null;
+
+      const ctrVals = history.map((h) => Number(h.ctr)).filter((n) => !isNaN(n) && n != null);
+      const avgCtrFromHistory = ctrVals.length ? ctrVals.reduce((a, b) => a + b, 0) / ctrVals.length : null;
+      const avgCtr = wave.avgCtr != null ? Number(wave.avgCtr) : avgCtrFromHistory;
+
+      return {
+        influencers: rosterRows.length,
+        formatCounts,
+        totalContentPcs,
+        totalReach,
+        avgEr,
+        avgCtr,
+        brandMentions: wave.brandMentions,
+        googleReviewsCollected: wave.googleReviewsCollected,
+        googleReviewsTotal: wave.googleReviewsTotal,
+      };
+    }
+
+    function formatBreakdownStr(formatCounts) {
+      const order = ['reel', 'tiktok', 'post', 'stories'];
+      return order.filter((k) => formatCounts[k]).map((k) => `${formatCounts[k]}× ${CONTENT_FORMAT_OPTIONS[k]}`).join(' / ') || '—';
+    }
+
+    function pctDelta(prev, curr) {
+      if (prev == null || curr == null || prev === 0) return null;
+      return ((curr - prev) / prev) * 100;
+    }
+
+    function fmtDelta(prev, curr) {
+      const d = pctDelta(prev, curr);
+      if (d == null) return '';
+      const sign = d > 0 ? '+' : '';
+      return `<span class="small" style="font-weight:700;color:${d >= 0 ? '#2e7d32' : '#c0392b'};">${sign}${d.toFixed(1)}%</span>`;
+    }
+
+    function waveReportCard(p, wave, prevWave) {
+      const curr = waveMetrics(p, wave);
+      const prev = prevWave ? waveMetrics(p, prevWave) : null;
+
+      const simpleRow = (label, prevVal, currVal, fmt) => {
+        const f = fmt || ((n) => n.toLocaleString());
+        return `
+        <tr>
+          <td>${escapeHtml(label)}</td>
+          <td>${prevWave ? (prevVal == null ? '—' : f(prevVal)) : '<span class="muted">no previous wave</span>'}</td>
+          <td style="font-weight:700;">${currVal == null ? '—' : f(currVal)}</td>
+          <td>${prevWave ? fmtDelta(prevVal, currVal) : ''}</td>
+        </tr>`;
+      };
+
+      const googleReviewsStr = (c) =>
+        c.googleReviewsTotal != null
+          ? `${c.googleReviewsCollected ?? 0}/${c.googleReviewsTotal} collected`
+          : c.googleReviewsCollected != null
+          ? `${c.googleReviewsCollected} collected`
+          : '—';
+
+      return `
+        <div class="card">
+          <div class="card-row" style="align-items:center;">
+            <h3 style="margin:0;">${escapeHtml(wave.label)} <span class="muted small">${wave.startDate || wave.endDate ? `(${wave.startDate ? formatDate(wave.startDate) : '—'} → ${wave.endDate ? formatDate(wave.endDate) : '—'})` : ''}</span></h3>
+            <button class="btn btn-ghost btn-sm" onclick="openWaveModal('${p.id}','${wave.id}')">✎ Edit wave numbers</button>
+          </div>
+          ${wave.notes ? `<p class="small muted" style="margin-top:4px;">${escapeHtml(wave.notes)}</p>` : ''}
+          <div class="table-wrap" style="margin-top:10px;">
+            <table>
+              <thead><tr><th>Metric</th><th>Previous wave${prevWave ? ` (${escapeHtml(prevWave.label)})` : ''}</th><th>Current wave</th><th>Δ</th></tr></thead>
+              <tbody>
+                ${simpleRow('Number of Influencers', prev ? prev.influencers : null, curr.influencers, (n) => String(n))}
+                <tr>
+                  <td>Content by pcs</td>
+                  <td>${prevWave ? `${prev.totalContentPcs}<div class="small muted">${formatBreakdownStr(prev.formatCounts)}</div>` : '<span class="muted">no previous wave</span>'}</td>
+                  <td style="font-weight:700;">${curr.totalContentPcs}<div class="small muted">${formatBreakdownStr(curr.formatCounts)}</div></td>
+                  <td>${prevWave ? fmtDelta(prev.totalContentPcs, curr.totalContentPcs) : ''}</td>
+                </tr>
+                ${simpleRow('Total reach', prev ? prev.totalReach : null, curr.totalReach)}
+                ${simpleRow('Average ER', prev ? prev.avgEr : null, curr.avgEr, (n) => Number(n).toFixed(2) + '%')}
+                ${simpleRow('Average CTR', prev ? prev.avgCtr : null, curr.avgCtr, (n) => Number(n).toFixed(2) + '%')}
+                ${simpleRow('Brand mentions', prev ? prev.brandMentions : null, curr.brandMentions, (n) => String(n))}
+                <tr>
+                  <td>Google reviews</td>
+                  <td>${prevWave ? googleReviewsStr(prev) : '<span class="muted">no previous wave</span>'}</td>
+                  <td style="font-weight:700;">${googleReviewsStr(curr)}</td>
+                  <td>${prevWave && prev.googleReviewsCollected != null && curr.googleReviewsCollected != null ? fmtDelta(prev.googleReviewsCollected, curr.googleReviewsCollected) : ''}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       `;
     }
 
@@ -583,8 +763,7 @@
        named groups alphabetically first, "Ungrouped" last — so bloggers in
        the same group always render together instead of scattered through
        an alphabetical table. */
-    function groupedRoster(projectId) {
-      const roster = projectRoster(projectId);
+    function groupedRoster(roster) {
       const visible = rosterGroupFilter ? roster.filter((r) => (r.groupLabel || '') === rosterGroupFilter) : roster;
       const buckets = {};
       visible.forEach((pb) => {
@@ -596,21 +775,50 @@
       return orderedKeys.map((key) => ({ key, label: key || 'Ungrouped', bloggers: buckets[key] }));
     }
 
+    /* Wave pills + wave management, shown above the roster/reporting content
+       whenever a project opted into waves (p.hasWaves). Shared chip-select
+       pattern used everywhere else in this file. Picking a specific wave
+       (vs. "All waves") scopes both the roster list below AND which wave
+       new bloggers get added into — see visibleRoster/addBloggerWaveId. */
+    function waveSelectorHtml(p) {
+      const waves = projectWaves(p.id);
+      if (activeWaveId === null) activeWaveId = waves.length ? waves[waves.length - 1].id : 'all';
+      return `
+        <div class="card" style="margin-bottom:14px;">
+          <div class="card-row" style="align-items:center;flex-wrap:wrap;gap:8px;">
+            <div class="chip-select" style="margin:0;flex-wrap:wrap;">
+              <div class="chip ${activeWaveId === 'all' ? 'selected' : ''}" onclick="setActiveWave('all')">All waves</div>
+              ${waves.map((w) => `<div class="chip ${activeWaveId === w.id ? 'selected' : ''}" onclick="setActiveWave('${w.id}')">${escapeHtml(w.label)}</div>`).join('')}
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0;">
+              ${activeWaveId && activeWaveId !== 'all' ? `<button class="btn btn-ghost btn-sm" onclick="openWaveModal('${p.id}','${activeWaveId}')">✎ Edit wave</button>` : ''}
+              <button class="btn btn-secondary btn-sm" onclick="openWaveModal('${p.id}')">+ New wave</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
     function projectRosterTab(p) {
       const projectId = p.id;
-      const roster = projectRoster(projectId);
-      const groups = projectGroupValues(projectId);
+      const roster = visibleRoster(p);
+      const groups = projectGroupValues(roster);
       const datalistOptions = [...GROUP_PRESETS, ...groups].filter((v, i, a) => a.indexOf(v) === i);
-      const sections = groupedRoster(projectId);
+      const sections = groupedRoster(roster);
+      const onAllWaves = p.hasWaves && activeWaveId === 'all';
       return `
+        ${p.hasWaves ? waveSelectorHtml(p) : ''}
         <div class="card">
           <div class="card-row" style="align-items:center;margin-bottom:6px;">
             <div>
               <h3 style="margin:0;">Roster <span class="muted small">(${roster.length})</span></h3>
-              <p class="small muted" style="margin:2px 0 0;">${roster.length} added</p>
+              <p class="small muted" style="margin:2px 0 0;">${roster.length} added${onAllWaves ? ' · showing every wave' : ''}</p>
             </div>
-            <button class="btn btn-primary btn-sm" onclick="openAddBloggerModal('${projectId}')">+ Add blogger from database</button>
+            ${onAllWaves
+              ? `<button class="btn btn-primary btn-sm" disabled title="Pick a specific wave first">+ Add blogger from database</button>`
+              : `<button class="btn btn-primary btn-sm" onclick="openAddBloggerModal('${projectId}')">+ Add blogger from database</button>`}
           </div>
+          ${onAllWaves ? `<p class="small muted" style="margin:0 0 10px;">Select a specific wave above to add bloggers to it.</p>` : ''}
           ${groups.length
             ? `<div class="chip-select" style="margin:14px 0;">
                 <div class="chip ${!rosterGroupFilter ? 'selected' : ''}" onclick="setRosterGroupFilter('')">All (${roster.length})</div>
@@ -647,11 +855,12 @@
       const links = pb.contentLinks || {};
       const linkFormats = formats.filter((f) => f !== 'stories');
       const hasAnyLinkField = linkFormats.length > 0 || formats.includes('stories');
+      const wave = pb.waveId ? (db.projectWaves || []).find((w) => w.id === pb.waveId) : null;
       return `
         <div class="roster-card">
           <div class="roster-card-top">
             <div>
-              <div class="roster-card-name">${escapeHtml(name)}</div>
+              <div class="roster-card-name">${escapeHtml(name)} ${wave && activeWaveId === 'all' ? `<span class="tag" style="margin-left:4px;">${escapeHtml(wave.label)}</span>` : ''}</div>
               ${b && b.instagramUrl ? `<a class="small" href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener">Instagram ↗</a>` : '<span class="small muted">Blogger removed from database</span>'}
             </div>
             <div class="roster-card-top-right">
@@ -867,6 +1076,16 @@
 
     /* ---------------- Add blogger to project (from directory) ---------------- */
     function openAddBloggerModal(projectId) {
+      const p = db.projects.find((x) => x.id === projectId);
+      /* For wave projects, bloggers are added into whichever wave is
+         currently selected (activeWaveId) — "already in roster" is scoped
+         to that one wave (see renderAddBloggerResults/runAiMatch), so the
+         same blogger can be re-added in a later wave. The Roster tab
+         already disables this button while "All waves" is selected, but
+         guard here too in case this is ever called from elsewhere. */
+      addBloggerWaveId = p && p.hasWaves ? (activeWaveId && activeWaveId !== 'all' ? activeWaveId : null) : null;
+      if (p && p.hasWaves && !addBloggerWaveId) { toast('Select a specific wave first.'); return; }
+      const wave = addBloggerWaveId ? (db.projectWaves || []).find((w) => w.id === addBloggerWaveId) : null;
       addBloggerCityFilter = '';
       addBloggerHistoryFilter = '';
       addBloggerSortBy = 'name';
@@ -879,7 +1098,7 @@
         <div class="modal-backdrop" onclick="if(event.target===this) closeAddBloggerModal()">
           <div class="modal" style="max-width:640px;">
             <button class="modal-close" onclick="closeAddBloggerModal()">✕</button>
-            <h2 style="margin-top:0;">Add blogger to project</h2>
+            <h2 style="margin-top:0;">Add blogger to project${wave ? ` — ${escapeHtml(wave.label)}` : ''}</h2>
             <input id="add-blogger-search" placeholder="Search by name, handle, city…" oninput="renderAddBloggerResults('${projectId}')" style="margin-bottom:10px;" />
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
               <select id="add-blogger-city" style="width:auto;" onchange="onAddBloggerFilterChange('${projectId}')">
@@ -954,9 +1173,19 @@
       renderAddBloggerResults(projectId);
     }
 
+    /* "Already in roster" is scoped to addBloggerWaveId when set — a
+       blogger who already did an earlier wave of this project should still
+       show up as addable for the current wave (that's the whole point of
+       waves: same blogger, separate roster row per wave). For non-wave
+       projects addBloggerWaveId is null and this is project-wide, same as
+       before. */
     function renderAddBloggerResults(projectId) {
       const q = (document.getElementById('add-blogger-search').value || '').trim().toLowerCase();
-      const already = new Set(projectRoster(projectId).map((pb) => pb.bloggerId));
+      const already = new Set(
+        projectRoster(projectId)
+          .filter((pb) => (addBloggerWaveId ? pb.waveId === addBloggerWaveId : true))
+          .map((pb) => pb.bloggerId)
+      );
       let results = db.bloggerDirectory
         .filter((b) => !already.has(b.id))
         .filter((b) => !q || `${b.profileName || ''} ${b.instagramUrl || ''} ${b.city || ''}`.toLowerCase().includes(q))
@@ -1001,6 +1230,7 @@
         const row = await dbInsert('projectBloggers', {
           projectId,
           bloggerId,
+          waveId: addBloggerWaveId || null,
           expectedVisitDate: null,
           visitTrackStatus: 'on_track',
           actualVisitDate: null,
@@ -1040,7 +1270,11 @@
       const briefEl = document.getElementById('ai-match-brief');
       const resultsEl = document.getElementById('ai-match-results');
       const brief = (briefEl && briefEl.value || '').trim();
-      const already = new Set(projectRoster(projectId).map((pb) => pb.bloggerId));
+      const already = new Set(
+        projectRoster(projectId)
+          .filter((pb) => (addBloggerWaveId ? pb.waveId === addBloggerWaveId : true))
+          .map((pb) => pb.bloggerId)
+      );
       let pool = db.bloggerDirectory
         .filter((b) => !already.has(b.id))
         .filter((b) => !addBloggerCityFilter || (b.city || '').trim().toLowerCase() === addBloggerCityFilter)
@@ -1120,6 +1354,109 @@
       if (row) row.remove();
     }
 
+    /* ---------------- Wave create/edit modal ---------------- */
+    /* Label/dates/notes describe the wave itself (e.g. "October 2026" or
+       "08/09", mirroring the Excel tab names). brandMentions, googleReviews
+       and avgCtr are hand-tracked, wave-level aggregate numbers that show
+       up in the brand report's KPI table (see waveMetrics/waveReportCard) —
+       there's no per-post source for these, the admin fills them in once
+       the wave wraps up. */
+    function openWaveModal(projectId, waveId) {
+      const w = waveId ? (db.projectWaves || []).find((x) => x.id === waveId) : null;
+      document.getElementById('modal-root').innerHTML = `
+        <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+          <div class="modal">
+            <button class="modal-close" onclick="closeModal()">✕</button>
+            <h2 style="margin-top:0;">${w ? 'Edit wave' : 'New wave'}</h2>
+            <label>Label</label>
+            <input id="w-label" value="${w ? escapeHtml(w.label) : ''}" placeholder="e.g. October 2026, or 08/09" />
+            <div class="grid grid-2">
+              <div><label>Start date</label><input id="w-start" type="date" value="${w && w.startDate ? w.startDate : ''}" /></div>
+              <div><label>End date</label><input id="w-end" type="date" value="${w && w.endDate ? w.endDate : ''}" /></div>
+            </div>
+            <label>Notes</label>
+            <textarea id="w-notes" placeholder="Anything specific to this wave...">${w ? escapeHtml(w.notes || '') : ''}</textarea>
+            <hr class="divider" />
+            <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">For the brand report</div>
+            <p class="small muted" style="margin-top:0;">Fill these in once the wave wraps up — views/likes/ER come from Blogger Database automatically, but these numbers aren't tracked per-post.</p>
+            <label>Brand mentions</label>
+            <input id="w-brand-mentions" type="number" min="0" value="${w && w.brandMentions != null ? w.brandMentions : ''}" />
+            <div class="grid grid-2">
+              <div><label>Google reviews collected</label><input id="w-reviews-collected" type="number" min="0" value="${w && w.googleReviewsCollected != null ? w.googleReviewsCollected : ''}" /></div>
+              <div><label>Google reviews goal</label><input id="w-reviews-total" type="number" min="0" value="${w && w.googleReviewsTotal != null ? w.googleReviewsTotal : ''}" /></div>
+            </div>
+            <label>Average CTR (%) <span class="muted small">(optional — overrides the auto-calculated average)</span></label>
+            <input id="w-avg-ctr" type="number" step="0.01" min="0" value="${w && w.avgCtr != null ? w.avgCtr : ''}" />
+            <div class="card-row" style="margin-top:18px;gap:8px;">
+              ${w ? `<button class="btn btn-danger btn-sm" onclick="deleteWave('${projectId}','${w.id}')">Delete wave</button>` : ''}
+              <button class="btn btn-primary" style="flex:1;" onclick="submitWave('${projectId}','${w ? w.id : ''}')">${w ? 'Save changes' : 'Create wave'}</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function numOrNull(id) {
+      const v = document.getElementById(id).value;
+      return v === '' ? null : Number(v);
+    }
+
+    async function submitWave(projectId, id) {
+      try {
+        const fields = {
+          projectId,
+          label: document.getElementById('w-label').value.trim() || 'Untitled wave',
+          startDate: document.getElementById('w-start').value || null,
+          endDate: document.getElementById('w-end').value || null,
+          notes: document.getElementById('w-notes').value.trim(),
+          brandMentions: numOrNull('w-brand-mentions'),
+          googleReviewsCollected: numOrNull('w-reviews-collected'),
+          googleReviewsTotal: numOrNull('w-reviews-total'),
+          avgCtr: numOrNull('w-avg-ctr'),
+        };
+        if (id) {
+          const updated = await dbUpdate('projectWaves', id, fields);
+          const idx = db.projectWaves.findIndex((x) => x.id === id);
+          if (idx >= 0) db.projectWaves[idx] = updated;
+          toast('Wave updated.');
+        } else {
+          const row = await dbInsert('projectWaves', { ...fields, createdAt: nowISO() });
+          db.projectWaves = db.projectWaves || [];
+          db.projectWaves.push(row);
+          activeWaveId = row.id;
+          toast('Wave created.');
+        }
+      } catch (err) {
+        console.error('submitWave failed:', err);
+        toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
+        return;
+      }
+      closeModal();
+      refreshProjectDetailTab();
+    }
+
+    /* Deleting a wave doesn't touch the roster/performance rows logged
+       under it (wave_id is ON DELETE SET NULL in the DB) — they just become
+       unassigned instead of disappearing, same spirit as removeFromRoster
+       elsewhere in this file never silently losing data. */
+    async function deleteWave(projectId, waveId) {
+      if (!confirm('Delete this wave? Bloggers/stats logged under it will stay, just unassigned from any wave.')) return;
+      try {
+        await dbDelete('projectWaves', waveId);
+        db.projectWaves = (db.projectWaves || []).filter((x) => x.id !== waveId);
+        db.projectBloggers.forEach((pb) => { if (pb.waveId === waveId) pb.waveId = null; });
+        (db.bloggerPerformanceHistory || []).forEach((h) => { if (h.waveId === waveId) h.waveId = null; });
+        if (activeWaveId === waveId) activeWaveId = 'all';
+        toast('Wave deleted.');
+      } catch (err) {
+        console.error('deleteWave failed:', err);
+        toast('Could not delete: ' + (err && err.message ? err.message : 'unknown error'));
+        return;
+      }
+      closeModal();
+      refreshProjectDetailTab();
+    }
+
     /* ---------------- Project create/edit modal ---------------- */
     function openProjectModal(id) {
       const p = id ? db.projects.find((x) => x.id === id) : null;
@@ -1136,6 +1473,7 @@
             <select id="p-status">
               ${Object.entries(PROJECT_STATUS_OPTIONS).map(([k, v]) => `<option value="${k}" ${(p ? p.status : 'planning') === k ? 'selected' : ''}>${v}</option>`).join('')}
             </select>
+            <div class="toggle-pill ${p && p.hasWaves ? 'on' : ''}" id="p-has-waves-toggle" style="margin:10px 0;" onclick="this.classList.toggle('on')"><span class="dot"></span>Recurring campaign (multiple waves) — e.g. Bowlers' monthly batches</div>
             <label>Deal stage</label>
             <select id="p-deal-status">
               ${Object.entries(DEAL_STATUS_META).map(([k, m]) => `<option value="${k}" ${(p ? p.dealStatus : 'lead') === k ? 'selected' : ''}>${m.label}</option>`).join('')}
@@ -1172,6 +1510,7 @@
         title: document.getElementById('p-title').value.trim(),
         category: document.getElementById('p-category').value.trim(),
         status: document.getElementById('p-status').value,
+        hasWaves: document.getElementById('p-has-waves-toggle').classList.contains('on'),
         dealStatus: document.getElementById('p-deal-status').value,
         clientContact: document.getElementById('p-client-contact').value.trim(),
         contractTerms: document.getElementById('p-contract-terms').value.trim(),
@@ -1228,6 +1567,7 @@
         db.projects = db.projects.filter((x) => x.id !== id);
         db.projectBloggers = db.projectBloggers.filter((x) => x.projectId !== id);
         db.projectChecklist = db.projectChecklist.filter((x) => x.projectId !== id);
+        db.projectWaves = (db.projectWaves || []).filter((x) => x.projectId !== id);
         toast('Project deleted.');
       } catch (err) {
         console.error('deleteProject failed:', err);

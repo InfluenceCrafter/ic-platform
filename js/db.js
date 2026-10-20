@@ -70,11 +70,11 @@ const TABLES = {
   },
   projects: {
     table: 'projects',
-    map: { id: 'id', brandId: 'brand_id', title: 'title', category: 'category', status: 'status', brief: 'brief', briefPdfLink: 'brief_pdf_link', deliverables: 'deliverables', address: 'address', startDate: 'start_date', endDate: 'end_date', contentDeadline: 'content_deadline', notes: 'notes', createdAt: 'created_at', clientContact: 'client_contact', contractTerms: 'contract_terms', dealStatus: 'deal_status' },
+    map: { id: 'id', brandId: 'brand_id', title: 'title', category: 'category', status: 'status', brief: 'brief', briefPdfLink: 'brief_pdf_link', deliverables: 'deliverables', address: 'address', startDate: 'start_date', endDate: 'end_date', contentDeadline: 'content_deadline', notes: 'notes', createdAt: 'created_at', clientContact: 'client_contact', contractTerms: 'contract_terms', dealStatus: 'deal_status', hasWaves: 'has_waves' },
   },
   bloggerPerformanceHistory: {
     table: 'blogger_performance_history',
-    map: { id: 'id', bloggerId: 'blogger_id', projectId: 'project_id', contentUrl: 'content_url', platform: 'platform', postedAt: 'posted_at', views: 'views', likes: 'likes', comments: 'comments', shares: 'shares', er: 'er', source: 'source', notes: 'notes', createdAt: 'created_at' },
+    map: { id: 'id', bloggerId: 'blogger_id', projectId: 'project_id', waveId: 'wave_id', contentUrl: 'content_url', platform: 'platform', postedAt: 'posted_at', views: 'views', reach: 'reach', likes: 'likes', comments: 'comments', shares: 'shares', er: 'er', ctr: 'ctr', source: 'source', notes: 'notes', createdAt: 'created_at' },
   },
   aiRecommendations: {
     table: 'ai_recommendations',
@@ -86,7 +86,11 @@ const TABLES = {
   },
   projectBloggers: {
     table: 'project_bloggers',
-    map: { id: 'id', projectId: 'project_id', bloggerId: 'blogger_id', expectedVisitDate: 'expected_visit_date', visitTrackStatus: 'visit_track_status', actualVisitDate: 'actual_visit_date', visitConfirmed: 'visit_confirmed', contentStatus: 'content_status', contentFormat: 'content_format', contentLinks: 'content_links', storiesLink: 'stories_link', groupLabel: 'group_label', statsRequested: 'stats_requested', statsSubmitted: 'stats_submitted', notes: 'notes', createdAt: 'created_at' },
+    map: { id: 'id', projectId: 'project_id', bloggerId: 'blogger_id', waveId: 'wave_id', expectedVisitDate: 'expected_visit_date', visitTrackStatus: 'visit_track_status', actualVisitDate: 'actual_visit_date', visitConfirmed: 'visit_confirmed', contentStatus: 'content_status', contentFormat: 'content_format', contentLinks: 'content_links', storiesLink: 'stories_link', groupLabel: 'group_label', statsRequested: 'stats_requested', statsSubmitted: 'stats_submitted', notes: 'notes', createdAt: 'created_at' },
+  },
+  projectWaves: {
+    table: 'project_waves',
+    map: { id: 'id', projectId: 'project_id', label: 'label', startDate: 'start_date', endDate: 'end_date', notes: 'notes', brandMentions: 'brand_mentions', googleReviewsCollected: 'google_reviews_collected', googleReviewsTotal: 'google_reviews_total', avgCtr: 'avg_ctr', createdAt: 'created_at' },
   },
 };
 
