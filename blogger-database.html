@@ -180,9 +180,21 @@
               </div>
             `).join('')}</div>`}
 
-        ${(b.pastBrands && b.pastBrands.length)
-          ? `<div class="small" style="margin-bottom:14px;"><span class="muted">Other brand collaborations:</span> ${b.pastBrands.map((x) => `<span class="tag">${escapeHtml(x)}</span>`).join(' ')} <button class="btn btn-ghost btn-sm" onclick="switchBloggerCardTab('profile')">Edit in Profile</button></div>`
-          : ''}
+        <div style="margin-bottom:14px;">
+          <div class="card-row" style="align-items:center;">
+            <h4 style="margin:0;">Other brand collaborations</h4>
+            <button class="btn btn-ghost btn-sm" onclick="toggleAddCollabRow('${b.id}')">+ Add collaboration</button>
+          </div>
+          <div style="margin-top:6px;">
+            ${(b.pastBrands && b.pastBrands.length)
+              ? b.pastBrands.map((x) => `<span class="tag" data-brand="${escapeHtml(x)}">${escapeHtml(x)} <span style="cursor:pointer;" title="Remove" onclick="removePastBrand('${b.id}', this.parentElement.dataset.brand)">✕</span></span>`).join(' ')
+              : '<span class="small muted">No other collaborations added yet.</span>'}
+          </div>
+          <div id="add-collab-row-${b.id}" class="card-row" style="display:none;margin-top:8px;gap:8px;">
+            <input id="new-collab-name-${b.id}" placeholder="Brand or collaboration name…" style="flex:1;" onkeydown="if(event.key==='Enter') addPastBrand('${b.id}')" />
+            <button class="btn btn-secondary btn-sm" onclick="addPastBrand('${b.id}')">Add</button>
+          </div>
+        </div>
 
         <hr class="divider" style="margin:16px 0;" />
         <h3 style="margin:0 0 6px;">Performance history</h3>
@@ -334,6 +346,56 @@
         return;
       }
       renderBloggerCard();
+    }
+
+    /* ---------------- Manual "other brand collaborations" (self-reported, outside/before this platform) ---------------- */
+    function toggleAddCollabRow(bloggerId) {
+      const row = document.getElementById('add-collab-row-' + bloggerId);
+      if (!row) return;
+      const show = row.style.display === 'none';
+      row.style.display = show ? 'flex' : 'none';
+      if (show) {
+        const input = document.getElementById('new-collab-name-' + bloggerId);
+        if (input) input.focus();
+      }
+    }
+
+    async function addPastBrand(bloggerId) {
+      const input = document.getElementById('new-collab-name-' + bloggerId);
+      const name = (input && input.value || '').trim();
+      if (!name) return;
+      try {
+        const b = db.bloggerDirectory.find((x) => x.id === bloggerId);
+        if (!b) return;
+        const current = b.pastBrands || [];
+        if (current.some((x) => x.toLowerCase() === name.toLowerCase())) {
+          toast('Already added.');
+          return;
+        }
+        const next = [...current, name];
+        b.pastBrands = next;
+        await dbUpdate('bloggerDirectory', bloggerId, { pastBrands: next });
+      } catch (err) {
+        console.error('addPastBrand failed:', err);
+        toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        renderBloggerCard();
+      }
+    }
+
+    async function removePastBrand(bloggerId, brand) {
+      try {
+        const b = db.bloggerDirectory.find((x) => x.id === bloggerId);
+        if (!b) return;
+        const next = (b.pastBrands || []).filter((x) => x !== brand);
+        b.pastBrands = next;
+        await dbUpdate('bloggerDirectory', bloggerId, { pastBrands: next });
+      } catch (err) {
+        console.error('removePastBrand failed:', err);
+        toast('Could not remove: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        renderBloggerCard();
+      }
     }
 
     async function addPerformanceEntry(bloggerId) {
