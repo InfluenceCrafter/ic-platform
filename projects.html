@@ -381,10 +381,11 @@
 
     /* ---------------- Overview tab ---------------- */
     function projectOverviewTab(p) {
-      const roster = projectRoster(p.id);
+      const roster = visibleRoster(p);
       const checklist = projectChecklist(p.id);
       const done = checklist.filter((i) => i.done).length;
       return `
+        ${p.hasWaves ? waveSelectorHtml(p) : ''}
         <div class="grid grid-2">
           <div class="card">
             <div class="small muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Brief</div>
@@ -848,6 +849,27 @@
       `;
     }
 
+    /* The performance-history entry (views/reach/likes/comments/er/ctr)
+       that belongs to THIS roster row — one blogger can have many history
+       entries across different projects/waves (see Blogger Database's own
+       Performance history tab), so this looks up the one scoped to this
+       exact project + wave combo, not just the blogger. */
+    function historyEntryForRoster(pb) {
+      return (db.bloggerPerformanceHistory || []).find(
+        (h) => h.bloggerId === pb.bloggerId && h.projectId === pb.projectId && (h.waveId || null) === (pb.waveId || null)
+      );
+    }
+
+    /* Deterministic color per blogger (same name → same color every render)
+       so the avatar circles in a long roster aren't all identical and give
+       the eye a quick anchor to tell cards apart at a glance. */
+    const AVATAR_COLORS = ['#4f46e5', '#16a34a', '#b45309', '#2563eb', '#be185d', '#0f766e', '#7c3aed', '#c8963e'];
+    function avatarColorFor(name) {
+      let hash = 0;
+      for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+      return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+    }
+
     function rosterCard(pb) {
       const b = db.bloggerDirectory.find((x) => x.id === pb.bloggerId);
       const name = b ? (b.profileName || 'Untitled blogger') : 'Blogger removed from database';
@@ -856,12 +878,17 @@
       const linkFormats = formats.filter((f) => f !== 'stories');
       const hasAnyLinkField = linkFormats.length > 0 || formats.includes('stories');
       const wave = pb.waveId ? (db.projectWaves || []).find((w) => w.id === pb.waveId) : null;
+      const initial = name.trim().charAt(0).toUpperCase() || '?';
+      const entry = historyEntryForRoster(pb) || {};
       return `
-        <div class="roster-card">
+        <div class="roster-card track-${pb.visitTrackStatus}">
           <div class="roster-card-top">
-            <div>
-              <div class="roster-card-name">${escapeHtml(name)} ${wave && activeWaveId === 'all' ? `<span class="tag" style="margin-left:4px;">${escapeHtml(wave.label)}</span>` : ''}</div>
-              ${b && b.instagramUrl ? `<a class="small" href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener">Instagram ↗</a>` : '<span class="small muted">Blogger removed from database</span>'}
+            <div class="roster-card-identity">
+              <div class="avatar" style="background:${avatarColorFor(name)};">${escapeHtml(initial)}</div>
+              <div>
+                <div class="roster-card-name">${escapeHtml(name)} ${wave && activeWaveId === 'all' ? `<span class="tag" style="margin-left:4px;">${escapeHtml(wave.label)}</span>` : ''}</div>
+                ${b && b.instagramUrl ? `<a class="small" href="${escapeHtml(b.instagramUrl)}" target="_blank" rel="noopener">Instagram ↗</a>` : '<span class="small muted">Blogger removed from database</span>'}
+              </div>
             </div>
             <div class="roster-card-top-right">
               <input class="roster-group-input" list="group-suggestions" value="${escapeHtml(pb.groupLabel || '')}" onchange="updateRoster('${pb.id}','groupLabel',this.value)" placeholder="Group…" />
@@ -910,11 +937,20 @@
                 </div>`
                       : ''
                   }`}
-            </div>
-            <div class="roster-field">
-              <div class="roster-field-label">Stats</div>
-              <div class="toggle-pill ${pb.statsRequested ? 'on' : ''}" onclick="toggleBoolField('${pb.id}','statsRequested')"><span class="dot"></span>Requested</div>
-              <div class="toggle-pill ${pb.statsSubmitted ? 'on' : ''}" onclick="toggleBoolField('${pb.id}','statsSubmitted')"><span class="dot"></span>Submitted</div>
+              <hr class="roster-stats-divider" />
+              <div class="roster-field-label" style="margin-bottom:7px;">Stats</div>
+              <div style="margin-bottom:9px;">
+                <div class="toggle-pill ${pb.statsRequested ? 'on' : ''}" onclick="toggleBoolField('${pb.id}','statsRequested')"><span class="dot"></span>Requested</div>
+                <div class="toggle-pill ${pb.statsSubmitted ? 'on' : ''}" onclick="toggleBoolField('${pb.id}','statsSubmitted')"><span class="dot"></span>Submitted</div>
+              </div>
+              <div class="roster-stats-grid">
+                <div><label>Views</label><input type="number" min="0" value="${entry.views ?? ''}" onchange="updateRosterStat('${pb.id}','views',this.value)" /></div>
+                <div><label>Reach</label><input type="number" min="0" value="${entry.reach ?? ''}" onchange="updateRosterStat('${pb.id}','reach',this.value)" /></div>
+                <div><label>Likes</label><input type="number" min="0" value="${entry.likes ?? ''}" onchange="updateRosterStat('${pb.id}','likes',this.value)" /></div>
+                <div><label>Comments</label><input type="number" min="0" value="${entry.comments ?? ''}" onchange="updateRosterStat('${pb.id}','comments',this.value)" /></div>
+                <div><label>ER %</label><input type="number" step="0.01" min="0" value="${entry.er ?? ''}" onchange="updateRosterStat('${pb.id}','er',this.value)" /></div>
+                <div><label>CTR %</label><input type="number" step="0.01" min="0" value="${entry.ctr ?? ''}" onchange="updateRosterStat('${pb.id}','ctr',this.value)" /></div>
+              </div>
             </div>
           </div>
         </div>
@@ -933,6 +969,54 @@
         await dbUpdate('projectBloggers', pbId, { [field]: value });
       } catch (err) {
         console.error('updateRoster failed:', err);
+        toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        refreshProjectDetailTab();
+      }
+    }
+
+    /* Upserts into blogger_performance_history, scoped to this exact
+       roster row's blogger + project + wave — lets the admin log stats
+       right next to the content links instead of hopping over to the
+       blogger's own card in Blogger Database. If no entry exists yet for
+       this project/wave combo, the first field edited creates one; later
+       edits just update it. (A blogger can still have other, separate
+       history entries from other projects/waves — those are untouched.) */
+    async function updateRosterStat(pbId, field, value) {
+      try {
+        const pb = db.projectBloggers.find((x) => x.id === pbId);
+        if (!pb) return;
+        const numValue = value === '' ? null : Number(value);
+        let entry = historyEntryForRoster(pb);
+        if (entry) {
+          entry[field] = numValue;
+          await dbUpdate('bloggerPerformanceHistory', entry.id, { [field]: numValue });
+        } else {
+          const base = {
+            bloggerId: pb.bloggerId,
+            projectId: pb.projectId,
+            waveId: pb.waveId || null,
+            contentUrl: '',
+            platform: '',
+            postedAt: null,
+            views: null,
+            reach: null,
+            likes: null,
+            comments: null,
+            shares: null,
+            er: null,
+            ctr: null,
+            source: 'roster',
+            notes: '',
+            createdAt: nowISO(),
+          };
+          base[field] = numValue;
+          const row = await dbInsert('bloggerPerformanceHistory', base);
+          db.bloggerPerformanceHistory = db.bloggerPerformanceHistory || [];
+          db.bloggerPerformanceHistory.push(row);
+        }
+      } catch (err) {
+        console.error('updateRosterStat failed:', err);
         toast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
       } finally {
         refreshProjectDetailTab();

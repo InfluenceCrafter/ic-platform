@@ -221,23 +221,43 @@ tbody tr:hover { background: var(--paper); }
 .roster-group:last-child { margin-bottom: 0; }
 .roster-group-title { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line-soft); }
 .roster-group-title .count { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--ink-faint); font-size: 12.5px; }
-.roster-cards { display: flex; flex-direction: column; gap: 10px; }
+/* Cards get real breathing room between them (was 10px — bumped up so one
+   blogger's block doesn't visually bleed into the next one below it) and a
+   soft shadow + left accent colored by visit status, so a long roster can
+   be scanned at a glance instead of reading as one grey wall of text. */
+.roster-cards { display: flex; flex-direction: column; gap: 18px; }
 
-.roster-card { border: 1px solid var(--line-soft); border-radius: 14px; padding: 16px 18px; background: #fff; transition: box-shadow 0.15s ease, border-color 0.15s ease; }
-.roster-card:hover { border-color: var(--line); box-shadow: var(--shadow-sm); }
+.roster-card { border: 1px solid var(--line-soft); border-left: 4px solid var(--line); border-radius: 14px; padding: 16px 18px; background: #fff; box-shadow: var(--shadow-sm); transition: box-shadow 0.15s ease, border-color 0.15s ease; }
+.roster-card:hover { border-color: var(--line); box-shadow: var(--shadow); }
+.roster-card.track-on_track { border-left-color: var(--green); }
+.roster-card.track-at_risk { border-left-color: var(--orange); }
+.roster-card.track-find_replacement { border-left-color: var(--red); }
 .roster-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line-soft); }
+.roster-card-identity { display: flex; align-items: center; gap: 11px; }
 .roster-card-name { font-weight: 700; font-size: 15px; }
 .roster-card-name a { font-weight: 500; }
 .roster-card-top-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .roster-group-input { width: 150px; font-size: 12.5px; padding: 7px 11px; margin: 0; }
 
-.roster-card-grid { display: grid; grid-template-columns: 1fr 1.5fr 0.85fr; gap: 22px; align-items: start; }
+.roster-card-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 14px; align-items: start; }
 @media (max-width: 880px) { .roster-card-grid { grid-template-columns: 1fr; gap: 14px; } }
+/* Each field (Visit / Content / Stats) gets its own soft-boxed panel —
+   gives the eye a clear boundary between the three without needing hard
+   borders, which is what made everything feel like it was running together. */
+.roster-field { background: var(--grey-bg); border-radius: var(--radius-sm); padding: 13px 14px; }
 .roster-field-label { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-faint); margin-bottom: 8px; }
-.roster-field select, .roster-field input:not([type="checkbox"]) { margin: 0 0 7px; }
+.roster-field select, .roster-field input:not([type="checkbox"]) { margin: 0 0 7px; background: #fff; }
 .roster-field select:last-child, .roster-field input:last-child { margin-bottom: 0; }
 .roster-date-row { display: flex; gap: 7px; margin-bottom: 7px; }
 .roster-date-row input { flex: 1; margin: 0; }
+
+/* Compact numeric stats grid, entered right inside the Content/Stats panel
+   instead of only on the blogger's own card in Blogger Database. */
+.roster-stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 9px; margin-top: 2px; }
+.roster-stats-grid div { display: flex; flex-direction: column; }
+.roster-stats-grid label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-faint); margin-bottom: 3px; }
+.roster-stats-grid input { margin: 0; padding: 6px 9px; font-size: 13px; background: #fff; }
+.roster-stats-divider { border: none; border-top: 1px solid var(--line); margin: 10px 0; }
 
 .toggle-pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 13px; font-size: 12.5px; font-weight: 600; cursor: pointer; background: #fff; color: var(--ink-soft); user-select: none; transition: all 0.15s ease; margin: 0 6px 6px 0; }
 .toggle-pill:hover { border-color: var(--ink-faint); }
