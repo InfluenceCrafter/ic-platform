@@ -161,10 +161,23 @@
         .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
     }
 
+    /* All brand collaborations are with OUR own brands/clients — the
+       dropdown below is deliberately a closed list (project titles we've
+       actually run, plus any brand name already tagged on some blogger)
+       rather than free text, so names stay consistent instead of drifting
+       into near-duplicates ("Nike" / "nike" / "Nike CZ"). */
+    function ourBrandOptions() {
+      const set = new Set();
+      (db.projects || []).forEach((p) => { if (p.title) set.add(p.title.trim()); });
+      (db.bloggerDirectory || []).forEach((b) => (b.pastBrands || []).forEach((x) => { if (x) set.add(x.trim()); }));
+      return [...set].filter(Boolean).sort((a, c) => a.localeCompare(c, undefined, { sensitivity: 'base' }));
+    }
+
     /* ---------------- Tabbed blogger card (History tab content) ---------------- */
     function bloggerHistoryTabHtml(b) {
       const entries = bloggerHistory(b.id);
       const internalProjects = internalProjectHistory(b.id);
+      const brandOptions = ourBrandOptions().filter((x) => !(b.pastBrands || []).includes(x));
       return `
         <h3 style="margin:0 0 6px;">Collaborations with our projects</h3>
         ${internalProjects.length === 0
@@ -182,17 +195,19 @@
 
         <div style="margin-bottom:14px;">
           <div class="card-row" style="align-items:center;">
-            <h4 style="margin:0;">Other brand collaborations</h4>
+            <h4 style="margin:0;">Brand collaborations</h4>
             <button class="btn btn-ghost btn-sm" onclick="toggleAddCollabRow('${b.id}')">+ Add collaboration</button>
           </div>
           <div style="margin-top:6px;">
             ${(b.pastBrands && b.pastBrands.length)
               ? b.pastBrands.map((x) => `<span class="tag" data-brand="${escapeHtml(x)}">${escapeHtml(x)} <span style="cursor:pointer;" title="Remove" onclick="removePastBrand('${b.id}', this.parentElement.dataset.brand)">✕</span></span>`).join(' ')
-              : '<span class="small muted">No other collaborations added yet.</span>'}
+              : '<span class="small muted">No collaborations added yet.</span>'}
           </div>
           <div id="add-collab-row-${b.id}" class="card-row" style="display:none;margin-top:8px;gap:8px;">
-            <input id="new-collab-name-${b.id}" placeholder="Brand or collaboration name…" style="flex:1;" onkeydown="if(event.key==='Enter') addPastBrand('${b.id}')" />
-            <button class="btn btn-secondary btn-sm" onclick="addPastBrand('${b.id}')">Add</button>
+            ${brandOptions.length
+              ? `<select id="new-collab-name-${b.id}" style="flex:1;">${brandOptions.map((x) => `<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join('')}</select>
+                 <button class="btn btn-secondary btn-sm" onclick="addPastBrand('${b.id}')">Add</button>`
+              : `<span class="small muted">No other brands to pick from yet — create a project first.</span>`}
           </div>
         </div>
 
