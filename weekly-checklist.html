@@ -53,14 +53,14 @@
        (add/remove items), same pattern as PROJECT_CHECKLIST_TEMPLATE in
        projects.html. Split by who owns that part of the business. */
     const STANDUP_TEMPLATE = [
-      { owner: 'Anna', title: 'Брифы — что создано / нужно создать на этой неделе' },
-      { owner: 'Anna', title: 'Статистика — что собрано, что в ожидании' },
-      { owner: 'Anna', title: 'Контент — что внесено в систему' },
-      { owner: 'Anna', title: 'СМИ (Sunset Cinema) — статус контактов и ответов' },
-      { owner: 'Veronika', title: 'Новые блогеры — кого нашла на этой неделе' },
-      { owner: 'Veronika', title: 'Переговоры — кто в процессе, кто ждёт ответа' },
-      { owner: 'Veronika', title: 'Подтверждения / отказы за неделю' },
-      { owner: 'Veronika', title: 'Дедлайны на контент у текущих блогеров' },
+      { owner: 'Veronika', title: 'Брифы — что создано / нужно создать на этой неделе' },
+      { owner: 'Veronika', title: 'Статистика — что собрано, что в ожидании' },
+      { owner: 'Veronika', title: 'Контент — что внесено в систему' },
+      { owner: 'Veronika', title: 'СМИ (Sunset Cinema) — статус контактов и ответов' },
+      { owner: 'Anna', title: 'Новые блогеры — кого нашла на этой неделе' },
+      { owner: 'Anna', title: 'Переговоры — кто в процессе, кто ждёт ответа' },
+      { owner: 'Anna', title: 'Подтверждения / отказы за неделю' },
+      { owner: 'Anna', title: 'Дедлайны на контент у текущих блогеров' },
       { owner: 'Both', title: 'Активные проекты — статус по каждому' },
       { owner: 'Both', title: 'Блокеры — что мешает двигаться' },
       { owner: 'Both', title: 'Задачи с прошлой недели — выполнены?' },
@@ -126,8 +126,8 @@
     function render() {
       renderWeekSelect();
       renderActiveProjects();
-      renderOwnerCard('Anna', 'col-anna', 'Брифы, статистика, контент, медиа');
-      renderOwnerCard('Veronika', 'col-veronika', 'Блогеры');
+      renderOwnerCard('Anna', 'col-anna', 'Блогеры');
+      renderOwnerCard('Veronika', 'col-veronika', 'Брифы, статистика, контент, медиа');
       renderOwnerCard('Both', 'col-both', 'Общее');
       renderQuestions();
     }
