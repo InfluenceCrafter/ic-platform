@@ -92,6 +92,18 @@ const TABLES = {
     table: 'project_waves',
     map: { id: 'id', projectId: 'project_id', label: 'label', startDate: 'start_date', endDate: 'end_date', notes: 'notes', brandMentions: 'brand_mentions', googleReviewsCollected: 'google_reviews_collected', googleReviewsTotal: 'google_reviews_total', avgCtr: 'avg_ctr', createdAt: 'created_at' },
   },
+  standupWeeks: {
+    table: 'standup_weeks',
+    map: { id: 'id', weekDate: 'week_date', createdAt: 'created_at' },
+  },
+  standupItems: {
+    table: 'standup_items',
+    map: { id: 'id', weekId: 'week_id', owner: 'owner', stepOrder: 'step_order', title: 'title', done: 'done', doneAt: 'done_at', createdAt: 'created_at' },
+  },
+  standupQuestions: {
+    table: 'standup_questions',
+    map: { id: 'id', weekId: 'week_id', text: 'text', resolved: 'resolved', resolvedAt: 'resolved_at', createdAt: 'created_at' },
+  },
 };
 
 function toRow(entity, obj) {

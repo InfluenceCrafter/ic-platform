@@ -92,6 +92,7 @@ function renderNav(activePage, db, user) {
     ['admin-dashboard.html', 'Dashboard'],
     ['projects.html', 'Projects'],
     ['blogger-database.html', 'Blogger Database'],
+    ['weekly-checklist.html', 'Weekly Call'],
   ];
   const links = user.role === 'admin' ? adminLinks : creatorLinks;
 

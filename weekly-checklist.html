@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Weekly Call — InfluenceCrafter Creator Hub</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <nav id="nav"></nav>
+  <div class="page">
+    <div class="card-row" style="align-items:flex-end;flex-wrap:wrap;">
+      <div>
+        <h1 style="margin-bottom:4px;">Созвон по понедельникам</h1>
+        <p class="muted" style="margin:0;">Проходимся по пунктам, чтобы ничего не забыть, и фиксируем вопросы.</p>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <select id="week-select" onchange="onWeekChange()" style="min-width:180px;"></select>
+        <button class="btn btn-secondary btn-sm" onclick="goToCurrentWeek()">Эта неделя</button>
+      </div>
+    </div>
+
+    <div id="active-projects-card"></div>
+
+    <div class="grid grid-2">
+      <div id="col-anna"></div>
+      <div id="col-veronika"></div>
+    </div>
+
+    <div id="col-both"></div>
+
+    <div id="questions-card"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.8/dist/umd/supabase.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script src="js/db.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/ui.js"></script>
+  <script>
+    let db, user, selectedWeekId;
+
+    (async function () {
+      const ctx = await requireRole(['admin']);
+      if (!ctx) return;
+      db = ctx.db; user = ctx.user;
+      renderNav('weekly-checklist.html', db, user);
+      await ensureCurrentWeek();
+      render();
+    })();
+
+    /* Default agenda, seeded once per new week — freely editable afterwards
+       (add/remove items), same pattern as PROJECT_CHECKLIST_TEMPLATE in
+       projects.html. Split by who owns that part of the business. */
+    const STANDUP_TEMPLATE = [
+      { owner: 'Anna', title: 'Брифы — что создано / нужно создать на этой неделе' },
+      { owner: 'Anna', title: 'Статистика — что собрано, что в ожидании' },
+      { owner: 'Anna', title: 'Контент — что внесено в систему' },
+      { owner: 'Anna', title: 'СМИ (Sunset Cinema) — статус контактов и ответов' },
+      { owner: 'Veronika', title: 'Новые блогеры — кого нашла на этой неделе' },
+      { owner: 'Veronika', title: 'Переговоры — кто в процессе, кто ждёт ответа' },
+      { owner: 'Veronika', title: 'Подтверждения / отказы за неделю' },
+      { owner: 'Veronika', title: 'Дедлайны на контент у текущих блогеров' },
+      { owner: 'Both', title: 'Активные проекты — статус по каждому' },
+      { owner: 'Both', title: 'Блокеры — что мешает двигаться' },
+      { owner: 'Both', title: 'Задачи с прошлой недели — выполнены?' },
+    ];
+
+    function mondayDateStr(d = new Date()) {
+      const dt = new Date(d);
+      const day = dt.getDay();
+      const diff = day === 0 ? -6 : 1 - day;
+      dt.setDate(dt.getDate() + diff);
+      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    }
+
+    /* Built from y/m/d components (not new Date(iso)) so the displayed day
+       never shifts because of UTC-vs-local parsing of a date-only string. */
+    function formatWeekDate(dateStr) {
+      const [y, m, d] = dateStr.split('-').map(Number);
+      return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+    }
+
+    /* Finds (or creates) this week's row. On creation: seeds the checklist
+       from STANDUP_TEMPLATE and carries forward any unresolved questions
+       from the most recent earlier week, so open questions never vanish. */
+    async function ensureCurrentWeek() {
+      const todayStr = mondayDateStr();
+      let week = db.standupWeeks.find((w) => w.weekDate === todayStr);
+      if (!week) {
+        week = await dbInsert('standupWeeks', { weekDate: todayStr, createdAt: nowISO() });
+        db.standupWeeks.push(week);
+
+        const itemRows = await dbInsertMany(
+          'standupItems',
+          STANDUP_TEMPLATE.map((t, i) => ({
+            weekId: week.id, owner: t.owner, stepOrder: i, title: t.title, done: false, doneAt: null, createdAt: nowISO(),
+          }))
+        );
+        db.standupItems.push(...itemRows);
+
+        const prevWeek = db.standupWeeks
+          .filter((w) => w.weekDate < todayStr && w.id !== week.id)
+          .sort((a, b) => b.weekDate.localeCompare(a.weekDate))[0];
+        if (prevWeek) {
+          const carryOver = db.standupQuestions.filter((q) => q.weekId === prevWeek.id && !q.resolved);
+          if (carryOver.length) {
+            const newQs = await dbInsertMany(
+              'standupQuestions',
+              carryOver.map((q) => ({ weekId: week.id, text: q.text, resolved: false, resolvedAt: null, createdAt: nowISO() }))
+            );
+            db.standupQuestions.push(...newQs);
+          }
+        }
+      }
+      selectedWeekId = week.id;
+    }
+
+    function weekItems(weekId) {
+      return db.standupItems.filter((i) => i.weekId === weekId).sort((a, b) => a.stepOrder - b.stepOrder);
+    }
+    function weekQuestions(weekId) {
+      return db.standupQuestions.filter((q) => q.weekId === weekId).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    }
+
+    function render() {
+      renderWeekSelect();
+      renderActiveProjects();
+      renderOwnerCard('Anna', 'col-anna', 'Брифы, статистика, контент, медиа');
+      renderOwnerCard('Veronika', 'col-veronika', 'Блогеры');
+      renderOwnerCard('Both', 'col-both', 'Общее');
+      renderQuestions();
+    }
+
+    function renderWeekSelect() {
+      const sel = document.getElementById('week-select');
+      const weeks = [...db.standupWeeks].sort((a, b) => b.weekDate.localeCompare(a.weekDate));
+      sel.innerHTML = weeks
+        .map((w) => `<option value="${w.id}" ${w.id === selectedWeekId ? 'selected' : ''}>${formatWeekDate(w.weekDate)}</option>`)
+        .join('');
+    }
+
+    function onWeekChange() {
+      selectedWeekId = document.getElementById('week-select').value;
+      render();
+    }
+
+    async function goToCurrentWeek() {
+      await ensureCurrentWeek();
+      render();
+    }
+
+    function renderActiveProjects() {
+      const container = document.getElementById('active-projects-card');
+      const active = db.projects.filter((p) => p.status === 'active');
+      if (!active.length) { container.innerHTML = ''; return; }
+      container.innerHTML = `
+        <div class="card">
+          <h3 style="margin:0 0 10px;">Активные проекты</h3>
+          ${active
+            .map(
+              (p) => `
+            <div class="card-row" style="padding:8px 0;border-bottom:1px solid var(--line-soft);align-items:center;">
+              <div><strong>${escapeHtml(p.title)}</strong>${p.category ? ` <span class="tag">${escapeHtml(p.category)}</span>` : ''}</div>
+              ${badge(p.status)}
+            </div>`
+            )
+            .join('')}
+        </div>`;
+    }
+
+    function renderOwnerCard(owner, containerId, subtitle) {
+      const container = document.getElementById(containerId);
+      const items = weekItems(selectedWeekId).filter((i) => i.owner === owner);
+      const done = items.filter((i) => i.done).length;
+      container.innerHTML = `
+        <div class="card">
+          <div class="card-row" style="align-items:center;margin-bottom:6px;">
+            <div><h3 style="margin:0;">${owner === 'Both' ? 'Общее' : escapeHtml(owner)}</h3><div class="small muted">${escapeHtml(subtitle)}</div></div>
+            <span class="muted small">${done}/${items.length}</span>
+          </div>
+          ${items.map((i) => taskItemHtml(i)).join('')}
+          <div class="card-row" style="margin-top:12px;gap:8px;">
+            <input id="new-item-${owner}" placeholder="Добавить пункт…" style="flex:1;" onkeydown="if(event.key==='Enter') addItem('${owner}')" />
+            <button class="btn btn-secondary btn-sm" onclick="addItem('${owner}')">+ Добавить</button>
+          </div>
+        </div>`;
+    }
+
+    function taskItemHtml(i) {
+      return `
+        <div class="task-item">
+          <div class="task-check ${i.done ? 'done' : ''}" style="cursor:pointer;" onclick="toggleItem('${i.id}')">${i.done ? '✓' : ''}</div>
+          <div style="flex:1;${i.done ? 'text-decoration:line-through;opacity:.6;' : ''}">${escapeHtml(i.title)}</div>
+          <button class="btn btn-ghost btn-sm" onclick="removeItem('${i.id}')" title="Удалить">✕</button>
+        </div>`;
+    }
+
+    function renderQuestions() {
+      const container = document.getElementById('questions-card');
+      const qs = weekQuestions(selectedWeekId);
+      const unresolved = qs.filter((q) => !q.resolved);
+      const resolved = qs.filter((q) => q.resolved);
+      container.innerHTML = `
+        <div class="card">
+          <h3 style="margin:0 0 6px;">Вопросы к звонку</h3>
+          <div class="small muted" style="margin-bottom:10px;">Нерешённые вопросы сами переносятся на следующую неделю.</div>
+          ${unresolved.length ? unresolved.map((q) => questionItemHtml(q)).join('') : '<div class="muted small">Нет открытых вопросов 🎉</div>'}
+          <div class="card-row" style="margin-top:12px;gap:8px;">
+            <input id="new-question" placeholder="Записать вопрос…" style="flex:1;" onkeydown="if(event.key==='Enter') addQuestion()" />
+            <button class="btn btn-secondary btn-sm" onclick="addQuestion()">+ Добавить</button>
+          </div>
+          ${
+            resolved.length
+              ? `<details style="margin-top:14px;"><summary class="small muted" style="cursor:pointer;">Решённые (${resolved.length})</summary>${resolved
+                  .map((q) => questionItemHtml(q))
+                  .join('')}</details>`
+              : ''
+          }
+        </div>`;
+    }
+
+    function questionItemHtml(q) {
+      return `
+        <div class="task-item">
+          <div class="task-check ${q.resolved ? 'done' : ''}" style="cursor:pointer;" onclick="toggleQuestion('${q.id}')">${q.resolved ? '✓' : ''}</div>
+          <div style="flex:1;${q.resolved ? 'text-decoration:line-through;opacity:.6;' : ''}">${escapeHtml(q.text)}</div>
+          <button class="btn btn-ghost btn-sm" onclick="removeQuestion('${q.id}')" title="Удалить">✕</button>
+        </div>`;
+    }
+
+    async function toggleItem(itemId) {
+      try {
+        const item = db.standupItems.find((i) => i.id === itemId);
+        if (!item) return;
+        const done = !item.done;
+        item.done = done;
+        item.doneAt = done ? nowISO() : null;
+        await dbUpdate('standupItems', itemId, { done, doneAt: item.doneAt });
+      } catch (err) {
+        console.error('toggleItem failed:', err);
+        toast('Не удалось сохранить: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        render();
+      }
+    }
+
+    async function addItem(owner) {
+      const input = document.getElementById(`new-item-${owner}`);
+      const title = (input && input.value || '').trim();
+      if (!title) return;
+      try {
+        const stepOrder = weekItems(selectedWeekId).length;
+        const row = await dbInsert('standupItems', { weekId: selectedWeekId, owner, stepOrder, title, done: false, doneAt: null, createdAt: nowISO() });
+        db.standupItems.push(row);
+      } catch (err) {
+        console.error('addItem failed:', err);
+        toast('Не удалось добавить: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        render();
+      }
+    }
+
+    async function removeItem(itemId) {
+      try {
+        await dbDelete('standupItems', itemId);
+        db.standupItems = db.standupItems.filter((i) => i.id !== itemId);
+      } catch (err) {
+        console.error('removeItem failed:', err);
+        toast('Не удалось удалить: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        render();
+      }
+    }
+
+    async function addQuestion() {
+      const input = document.getElementById('new-question');
+      const text = (input && input.value || '').trim();
+      if (!text) return;
+      try {
+        const row = await dbInsert('standupQuestions', { weekId: selectedWeekId, text, resolved: false, resolvedAt: null, createdAt: nowISO() });
+        db.standupQuestions.push(row);
+      } catch (err) {
+        console.error('addQuestion failed:', err);
+        toast('Не удалось добавить вопрос: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        render();
+      }
+    }
+
+    async function toggleQuestion(id) {
+      try {
+        const q = db.standupQuestions.find((x) => x.id === id);
+        if (!q) return;
+        const resolved = !q.resolved;
+        q.resolved = resolved;
+        q.resolvedAt = resolved ? nowISO() : null;
+        await dbUpdate('standupQuestions', id, { resolved, resolvedAt: q.resolvedAt });
+      } catch (err) {
+        console.error('toggleQuestion failed:', err);
+        toast('Не удалось сохранить: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        render();
+      }
+    }
+
+    async function removeQuestion(id) {
+      try {
+        await dbDelete('standupQuestions', id);
+        db.standupQuestions = db.standupQuestions.filter((x) => x.id !== id);
+      } catch (err) {
+        console.error('removeQuestion failed:', err);
+        toast('Не удалось удалить: ' + (err && err.message ? err.message : 'unknown error'));
+      } finally {
+        render();
+      }
+    }
+  </script>
+</body>
+</html>
